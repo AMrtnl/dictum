@@ -313,6 +313,12 @@ final class DictationController {
             case .none: nil
             }
             view?.onToggleSize = { [weak self] in self?.toggleWindowSize() }
+            view?.onToggleRewrite = { [weak self] in
+                guard let self else { return }
+                settings.mode = settings.mode == .rewrite ? .dictation : .rewrite
+            }
+            view?.onOpenSettings = { WindowManager.shared.show(.settings) }
+            view?.rewriteOn = settings.mode == .rewrite
             panel = view.map { RecordingPanel(content: $0, positionKey: config.style.rawValue) }
         }
         return panel
@@ -349,11 +355,13 @@ final class DictationController {
 
     private func observeIndicatorSettings() {
         withObservationTracking {
-            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator)
+            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator, settings.mode)
         } onChange: { [weak self] in
             Task { @MainActor in
-                self?.refreshIndicator()
-                self?.observeIndicatorSettings()
+                guard let self else { return }
+                self.panel?.content.rewriteOn = self.settings.mode == .rewrite
+                self.refreshIndicator()
+                self.observeIndicatorSettings()
             }
         }
     }
@@ -362,7 +370,8 @@ final class DictationController {
         toastTask?.cancel()
         toast?.orderOut(nil)
         if state == .idle { panel?.orderOut(nil) }  // the toast takes the indicator's spot
-        let toast = RecordingPanel(content: ToastView(message, symbol: symbol))
+        let toast = RecordingPanel(content: ToastView(message, symbol: symbol),
+                                   anchor: RecordingPanel.Anchor.saved(for: RecordingWindowStyle.mini.rawValue))
         self.toast = toast
         toast.show()
         toastTask = Task { [weak self] in

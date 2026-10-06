@@ -26,15 +26,16 @@ enum RecordingWindowStyle: String, CaseIterable, Identifiable {
 /// dozen property writes in-process. (A SwiftUI version of the pill pulled in
 /// ~130 MB of Metal buffers and 4–8 % CPU.)
 class RecordingWindowView: NSView {
-    /// `idle` is the dimmed resting state used when "Always show" is on.
+    /// `idle` is the resting state shown when "Always show" is on.
     enum Mode { case idle, recording, processing }
 
     var mode: Mode = .recording {
-        didSet {
-            guard mode != oldValue else { return }
-            layer?.opacity = mode == .idle ? 0.55 : 1
-            modeDidChange()
-        }
+        didSet { if mode != oldValue { modeDidChange() } }
+    }
+
+    /// Whether Rewrite is the current default mode (Mini's ✦ button shows it).
+    var rewriteOn = false {
+        didSet { if rewriteOn != oldValue { labelsDidChange() } }
     }
 
     /// Text for styles that have room for it: the mode while recording, the step while processing.
@@ -59,8 +60,24 @@ class RecordingWindowView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    /// Set by the controller; runs when the style's collapse/expand control is clicked.
+    /// Set by the controller for the window's own controls.
     var onToggleSize: (() -> Void)?
+    var onToggleRewrite: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
+
+    // MARK: Anchoring (styles that snap to screen edges)
+
+    /// Whether the panel snaps this style to a screen edge or corner after a drag.
+    var snapsToAnchors: Bool { false }
+    /// Which screen edge/corner the panel is attached to; the surface hugs that side.
+    var anchor: RecordingPanel.Anchor = .bottom {
+        didSet { if anchor != oldValue { withoutAnimation { layoutSurface() } } }
+    }
+    /// Distance from the window's edge to the surface on the anchored sides (shadow room).
+    var edgeMargin: CGFloat { 12 }
+    /// The window size this style wants right now; the panel follows it (grow now, shrink later).
+    var preferredSize: NSSize { bounds.size }
+    var onPreferredSizeChange: (() -> Void)?
 
     func push(level: Float) {
         levels.removeLast()

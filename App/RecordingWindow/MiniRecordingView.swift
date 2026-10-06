@@ -1,50 +1,339 @@
 import AppKit
 import QuartzCore
 
-/// Small black capsule with a centred, mirrored waveform.
+/// The small window, superwhisper-style. At rest it sleeps as a thin translucent
+/// pill hugging a screen edge or corner; hovering grows it into a toolbar
+/// (✦ Rewrite, Settings, Expand); while dictating it is a black capsule with a
+/// centred, mirrored waveform. Shapes morph with Core Animation, in the window server.
 final class MiniRecordingView: RecordingWindowView {
-    private static let capsuleSize = CGSize(width: 86, height: 30)
-    private static let margin = NSEdgeInsets(top: 16, left: 16, bottom: 12, right: 16)
+    private enum Visual { case sleep, toolbar, active }
+
+    private struct Button {
+        let highlight = CALayer()
+        let icon = CALayer()
+        var tooltip: () -> String
+        var action: () -> Void
+    }
+
+    private static let margin: CGFloat = 12
+    private static let tooltipZone: CGFloat = 38
+    private static let sleepSize = CGSize(width: 56, height: 12)
+    private static let toolbarSize = CGSize(width: 150, height: 44)
+    private static let activeSize = CGSize(width: 86, height: 30)
+    private static let buttonSize: CGFloat = 34
+    private static let buttonGap: CGFloat = 12
     private static let barCount = 11
     private static let barWidth: CGFloat = 2.5
     private static let barStep: CGFloat = 5
     private static let maxBarHeight: CGFloat = 16
+    private static let tooltipFont = NSFont.systemFont(ofSize: 13, weight: .medium)
 
+    private let capsule = CALayer()
+    private let hoverPad = CALayer()
     private let bars = (0..<barCount).map { _ in CALayer() }
+    private var buttons: [Button] = []
+    private let tooltip = CALayer()
+    private let tooltipLabel = CATextLayer()
+    private var visual: Visual = .active
+    private var hoveredButton: Int?
+    private var expandWork: DispatchWorkItem?
+    private var collapseWork: DispatchWorkItem?
+    private var hoverPoll: Timer?
 
     init() {
-        let half = Self.barCount / 2
         super.init(
-            size: NSSize(
-                width: Self.capsuleSize.width + Self.margin.left + Self.margin.right,
-                height: Self.capsuleSize.height + Self.margin.top + Self.margin.bottom
-            ),
-            historyLength: half + 1
+            size: NSSize(width: Self.activeSize.width + 2 * Self.margin, height: Self.activeSize.height + 2 * Self.margin),
+            historyLength: Self.barCount / 2 + 1
         )
+        // A nearly invisible pad widens the hover target around the thin sleeping pill.
+        hoverPad.backgroundColor = NSColor.white.withAlphaComponent(0.004).cgColor
+        layer?.addSublayer(hoverPad)
 
-        let capsule = makeSurface(
-            frame: CGRect(origin: CGPoint(x: Self.margin.left, y: Self.margin.bottom), size: Self.capsuleSize),
-            cornerRadius: Self.capsuleSize.height / 2,
-            shadowRadius: 8
-        )
-        capsule.backgroundColor = NSColor.black.cgColor
+        capsule.borderWidth = 1
+        capsule.shadowColor = NSColor.black.cgColor
+        capsule.shadowOffset = CGSize(width: 0, height: -2)
         layer?.addSublayer(capsule)
 
-        let span = CGFloat(Self.barCount - 1) * Self.barStep + Self.barWidth
-        let originX = (Self.capsuleSize.width - span) / 2
-        for (index, bar) in bars.enumerated() {
+        for bar in bars {
             bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: Self.barWidth)
-            bar.position = CGPoint(
-                x: originX + CGFloat(index) * Self.barStep + Self.barWidth / 2,
-                y: Self.capsuleSize.height / 2
-            )
             bar.cornerRadius = Self.barWidth / 2
             bar.backgroundColor = NSColor.white.withAlphaComponent(0.95).cgColor
             capsule.addSublayer(bar)
         }
+
+        buttons = [
+            Button(tooltip: { [unowned self] in rewriteOn ? "Rewrite on" : "Rewrite off" },
+                   action: { [unowned self] in onToggleRewrite?() }),
+            Button(tooltip: { "Settings" }, action: { [unowned self] in onOpenSettings?() }),
+            Button(tooltip: { "Expand window" }, action: { [unowned self] in onToggleSize?() }),
+        ]
+        let symbols = ["sparkle", "waveform", "arrow.up.left.and.arrow.down.right"]
+        for (button, symbol) in zip(buttons, symbols) {
+            button.highlight.bounds = CGRect(x: 0, y: 0, width: Self.buttonSize, height: Self.buttonSize)
+            button.highlight.cornerRadius = Self.buttonSize / 2
+            button.highlight.opacity = 0
+            button.icon.bounds = CGRect(x: 0, y: 0, width: 18, height: 18)
+            button.icon.contentsGravity = .resizeAspect
+            button.icon.contents = Self.symbol(symbol)
+            button.icon.opacity = 0
+            capsule.addSublayer(button.highlight)
+            capsule.addSublayer(button.icon)
+        }
+
+        tooltip.cornerRadius = 9
+        tooltip.backgroundColor = NSColor(white: 0.1, alpha: 0.94).cgColor
+        tooltip.borderWidth = 1
+        tooltip.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        tooltip.opacity = 0
+        tooltipLabel.font = Self.tooltipFont
+        tooltipLabel.fontSize = Self.tooltipFont.pointSize
+        tooltipLabel.foregroundColor = NSColor.white.withAlphaComponent(0.88).cgColor
+        tooltipLabel.contentsScale = 2
+        tooltip.addSublayer(tooltipLabel)
+        layer?.addSublayer(tooltip)
+
+        apply(.active, animated: false)
     }
 
+    // MARK: Geometry
+
+    override var snapsToAnchors: Bool { true }
+    override var edgeMargin: CGFloat { Self.margin }
+    override var surfaceFrame: CGRect { capsule.frame }
+
+    override var preferredSize: NSSize {
+        let size = Self.size(of: visual)
+        let extra = visual == .toolbar ? Self.tooltipZone : 0
+        return NSSize(width: size.width + 2 * Self.margin, height: size.height + 2 * Self.margin + extra)
+    }
+
+    private static func size(of visual: Visual) -> CGSize {
+        switch visual {
+        case .sleep: sleepSize
+        case .toolbar: toolbarSize
+        case .active: activeSize
+        }
+    }
+
+    /// The surface hugs the anchored side of the window; any extra room (tooltips) is on the inner side.
+    private func anchoredRect(_ size: CGSize) -> CGRect {
+        let x = anchor.isLeft ? Self.margin
+            : anchor.isRight ? bounds.width - Self.margin - size.width
+            : (bounds.width - size.width) / 2
+        let y = anchor.isTop ? bounds.height - Self.margin - size.height : Self.margin
+        return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    override func layoutSurface() {
+        // The window grew or shrank around the anchored edge: re-pin, keeping the current size.
+        capsule.frame = anchoredRect(capsule.bounds.size)
+        updateShadowPath(capsule)
+        hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
+        if hoveredButton != nil { positionTooltip() }
+    }
+
+    // MARK: States
+
+    private func apply(_ next: Visual, animated: Bool) {
+        visual = next
+        onPreferredSizeChange?()  // grows the window now if the new shape needs room
+
+        let size = Self.size(of: next)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(animated ? 0.24 : 0)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1))
+        CATransaction.setDisableActions(!animated)
+
+        capsule.frame = anchoredRect(size)
+        capsule.cornerRadius = size.height / 2
+        updateShadowPath(capsule)
+        switch next {
+        case .sleep:
+            // Translucent and outlined, like superwhisper's resting pill.
+            capsule.backgroundColor = NSColor(white: 0.1, alpha: 0.62).cgColor
+            capsule.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
+            capsule.shadowOpacity = 0.18
+            capsule.shadowRadius = 3
+        case .toolbar:
+            capsule.backgroundColor = NSColor(white: 0.04, alpha: 0.9).cgColor
+            capsule.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+            capsule.shadowOpacity = 0.35
+            capsule.shadowRadius = 10
+        case .active:
+            capsule.backgroundColor = NSColor.black.cgColor
+            capsule.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+            capsule.shadowOpacity = 0.35
+            capsule.shadowRadius = 8
+        }
+        hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
+
+        let span = CGFloat(Self.barCount - 1) * Self.barStep + Self.barWidth
+        for (index, bar) in bars.enumerated() {
+            bar.position = CGPoint(x: (size.width - span) / 2 + CGFloat(index) * Self.barStep + Self.barWidth / 2,
+                                   y: size.height / 2)
+            bar.opacity = next == .active ? 1 : 0
+        }
+        let rowWidth = 3 * Self.buttonSize + 2 * Self.buttonGap
+        for (index, button) in buttons.enumerated() {
+            let centre = CGPoint(x: (size.width - rowWidth) / 2 + Self.buttonSize / 2
+                                    + CGFloat(index) * (Self.buttonSize + Self.buttonGap),
+                                 y: size.height / 2)
+            button.highlight.position = centre
+            button.icon.position = centre
+            button.icon.opacity = next == .toolbar ? iconOpacity(index) : 0
+            button.highlight.opacity = next == .toolbar && hoveredButton == index ? 1 : 0
+        }
+        if next != .toolbar {
+            hoveredButton = nil
+            tooltip.opacity = 0
+        }
+        CATransaction.commit()
+        updateButtonHighlights()
+
+        hoverPoll?.invalidate()
+        hoverPoll = nil
+        if next == .toolbar { startHoverPoll() }
+    }
+
+    override func modeDidChange() {
+        expandWork?.cancel()
+        expandWork = nil
+        collapseWork?.cancel()
+        collapseWork = nil
+        switch mode {
+        case .idle:
+            stopAnimations()
+            apply(.sleep, animated: window?.isVisible == true)
+        case .recording:
+            stopAnimations()
+            apply(.active, animated: window?.isVisible == true)
+            withoutAnimation { levelsDidChange() }
+        case .processing:
+            apply(.active, animated: false)
+            startWave()
+        }
+    }
+
+    override func labelsDidChange() {
+        guard visual == .toolbar else { return }
+        withoutAnimation { buttons[0].icon.opacity = iconOpacity(0) }
+        if hoveredButton != nil { positionTooltip() }
+    }
+
+    private func iconOpacity(_ index: Int) -> Float {
+        index == 0 && !rewriteOn ? 0.5 : 1
+    }
+
+    // MARK: Hover
+
+    private var hoverRect: CGRect {
+        visual == .sleep ? capsule.frame.insetBy(dx: -10, dy: -9) : capsule.frame.insetBy(dx: -6, dy: -6)
+    }
+
+    override func hoverChanged(at point: NSPoint?) {
+        guard mode == .idle else { return }
+        if let point, hoverRect.contains(point) {
+            collapseWork?.cancel()
+            collapseWork = nil
+            if visual == .sleep, expandWork == nil {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, mode == .idle else { return }
+                    expandWork = nil
+                    apply(.toolbar, animated: true)
+                }
+                expandWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+            }
+            setHoveredButton(visual == .toolbar ? buttonIndex(at: point) : nil)
+        } else {
+            expandWork?.cancel()
+            expandWork = nil
+            setHoveredButton(nil)
+            guard visual == .toolbar, collapseWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                collapseWork = nil
+                if mode == .idle { apply(.sleep, animated: true) }
+            }
+            collapseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        }
+    }
+
+    /// Exit events can be missed over the transparent part of the window, so while the
+    /// toolbar is open the pointer is also checked a few times a second.
+    private func startHoverPoll() {
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window else { return }
+                self.hoverChanged(at: self.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+            }
+        }
+        timer.tolerance = 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        hoverPoll = timer
+    }
+
+    private func buttonIndex(at point: NSPoint) -> Int? {
+        buttons.firstIndex { button in
+            capsule.convert(button.highlight.frame, to: layer).insetBy(dx: -4, dy: -4).contains(point)
+        }
+    }
+
+    private func setHoveredButton(_ index: Int?) {
+        guard index != hoveredButton else { return }
+        hoveredButton = index
+        updateButtonHighlights()
+        if index == nil {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.12)
+            tooltip.opacity = 0
+            CATransaction.commit()
+        } else {
+            positionTooltip()
+        }
+    }
+
+    private func updateButtonHighlights() {
+        withoutAnimation {
+            for (index, button) in buttons.enumerated() {
+                button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
+                button.highlight.opacity = visual == .toolbar && hoveredButton == index ? 1 : 0
+            }
+        }
+    }
+
+    /// Tooltip on the side away from the screen edge, centred on the hovered button.
+    private func positionTooltip() {
+        guard let index = hoveredButton else { return }
+        let text = buttons[index].tooltip()
+        let textSize = textSize(text, font: Self.tooltipFont)
+        let size = CGSize(width: textSize.width + 24, height: textSize.height + 12)
+        let buttonFrame = capsule.convert(buttons[index].highlight.frame, to: layer)
+        var x = buttonFrame.midX - size.width / 2
+        x = min(max(x, 4), bounds.width - size.width - 4)
+        let target = capsule.convert(capsule.bounds, to: layer)
+        let y = anchor.isTop ? target.minY - 8 - size.height : target.maxY + 8
+        withoutAnimation {
+            tooltipLabel.string = text
+            tooltipLabel.frame = CGRect(x: 12, y: 6, width: textSize.width, height: textSize.height)
+            tooltip.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+        }
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.12)
+        tooltip.opacity = 1
+        CATransaction.commit()
+    }
+
+    override func control(at point: NSPoint) -> (() -> Void)? {
+        guard visual == .toolbar, let index = buttonIndex(at: point) else { return nil }
+        return buttons[index].action
+    }
+
+    // MARK: Waveform
+
     override func levelsDidChange() {
+        guard visual == .active, mode == .recording else { return }
         let half = Self.barCount / 2
         for (index, bar) in bars.enumerated() {
             let distance = abs(index - half)
@@ -54,13 +343,8 @@ final class MiniRecordingView: RecordingWindowView {
         }
     }
 
-    override func modeDidChange() {
-        guard mode == .processing else {
-            stopAnimations()
-            if mode == .idle { withoutAnimation { levelsDidChange() } }
-            return
-        }
-        // Bars settle to dots, then a wave ripples out from the centre.
+    /// Processing: bars settle to dots, then a wave ripples out from the centre.
+    private func startWave() {
         withoutAnimation {
             for bar in bars { bar.bounds.size.height = Self.barWidth }
         }
@@ -83,5 +367,14 @@ final class MiniRecordingView: RecordingWindowView {
 
     override func stopAnimations() {
         for bar in bars { bar.removeAnimation(forKey: "wave") }
+    }
+
+    private static func symbol(_ name: String) -> Any? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+            )?
+            .layerContents(forContentsScale: 2)
     }
 }

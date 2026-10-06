@@ -3,9 +3,13 @@ import QuartzCore
 
 /// A short message in the recording window's spot: "No speech detected", etc.
 final class ToastView: RecordingWindowView {
+    override var surfaceFrame: CGRect {
+        bounds.insetBy(dx: Self.margin.left, dy: Self.margin.bottom)
+    }
+
     private static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
     private static let height: CGFloat = 34
-    private static let margin = NSEdgeInsets(top: 16, left: 16, bottom: 12, right: 16)
+    private static let margin = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
 
     init(_ message: String, symbol: String = "exclamationmark.circle.fill") {
         let textWidth = min(textSize(message, font: Self.font).width, 420)

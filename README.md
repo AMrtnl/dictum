@@ -5,7 +5,7 @@
 <p align="center">Hold a shortcut, speak, let go — your words are typed into whatever app you're in.<br>
 On-device dictation for Apple Silicon Macs, powered by Cohere Transcribe and Tiny Aya.</p>
 
-<p align="center"><img src="docs/images/mini.png" height="58" alt="Mini recording window"> &nbsp; <img src="docs/images/classic.png" height="150" alt="Classic recording window"></p>
+<p align="center"><img src="docs/images/mini-sleep.png" height="36" alt="Sleeping pill"> &nbsp; <img src="docs/images/mini-toolbar.png" height="96" alt="Hover toolbar"> &nbsp; <img src="docs/images/mini.png" height="54" alt="Recording"> &nbsp; <img src="docs/images/classic.png" height="150" alt="Classic recording window"></p>
 
 ## Features
 
@@ -13,10 +13,10 @@ On-device dictation for Apple Silicon Macs, powered by Cohere Transcribe and Tin
 - **Fully on-device.** Cohere Transcribe (4-bit, 14 languages) runs locally with MLX. Nothing leaves your Mac.
 - **Rewrite mode.** Hold ⌥⇧Space, or make Rewrite the default, and Tiny Aya removes fillers, false starts and self-corrections. If its rewrite drifts from what you said, Dictum pastes your plain transcript instead.
 - **Light on resources.** 0 % CPU and no wakeups between dictations. See [Resource use](#resource-use).
-- **Recording window:** Mini, Classic or None, optionally always on screen. It's fully opaque while recording and dims to 55 % at rest.
-  - Drag it anywhere; Dictum remembers the spot.
-  - Drag Classic's edges to resize it; the waveform reflows.
-  - Classic's ↘↖ button collapses it to Mini.
+- **Recording window:**
+  - **Small window:** sleeps as a thin translucent pill when idle. Hover it for ✦ Rewrite, Settings and ⤢ Expand. Drag it to snap to the top or bottom of the screen, centred or in a corner.
+  - **Large window (Classic):** moves freely and resizes from its edges. Its ↘↖ button returns to the pill.
+  - Both are fully opaque while recording.
 - **History** keeps both the rewrite and the original. Failed dictations keep their audio so you can retry them. **Paste Last** is on ⌃⌥V.
 - Mic picker, language hint, sounds, launch at login, and "keep models loaded for" to trade memory against first-use speed.
 

@@ -12,16 +12,38 @@ final class RecordingPanel: NSPanel {
         static let bottom = Edges(rawValue: 1 << 3)
     }
 
+    /// Screen edge or corner a snapping panel is attached to.
+    enum Anchor: String, CaseIterable {
+        case topLeft, top, topRight, bottomLeft, bottom, bottomRight
+
+        var isTop: Bool { self == .topLeft || self == .top || self == .topRight }
+        var isLeft: Bool { self == .topLeft || self == .bottomLeft }
+        var isRight: Bool { self == .topRight || self == .bottomRight }
+
+        /// Persisted per style, so the small window comes back where it was snapped.
+        static func saved(for style: String) -> Anchor {
+            UserDefaults.standard.string(forKey: "panelAnchor.\(style)").flatMap(Anchor.init) ?? .bottom
+        }
+    }
+
     let content: RecordingWindowView
 
     private static let bottomInset: CGFloat = 8
+    /// Gap between a snapped surface and the screen edge.
+    private static let snapInset: CGFloat = 10
     private var visibilityGeneration = 0
     /// UserDefaults key for where (and how big) the user left this style; nil = fixed and click-through (toasts).
     private let frameKey: String?
+    private let style: String?
+    private var shrinkWork: DispatchWorkItem?
 
-    init(content: RecordingWindowView, positionKey: String? = nil) {
+    /// - Parameters:
+    ///   - positionKey: the style name; enables dragging and remembers the position.
+    ///   - anchor: for click-through panels (toasts), the edge to appear at.
+    init(content: RecordingWindowView, positionKey: String? = nil, anchor: Anchor? = nil) {
         self.content = content
         self.frameKey = positionKey.map { "panelFrame.\($0)" }
+        self.style = positionKey
         super.init(
             contentRect: NSRect(origin: .zero, size: content.frame.size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -46,7 +68,14 @@ final class RecordingPanel: NSPanel {
         if content.isResizable, let saved = savedFrame {
             setContentSize(clamped(saved.size))
         }
+        if content.snapsToAnchors || anchor != nil {
+            content.anchor = anchor ?? positionKey.map(Anchor.saved) ?? .bottom
+            content.onPreferredSizeChange = { [weak self] in self?.fitContent() }
+            setContentSize(content.preferredSize)
+        }
     }
+
+    private var isAnchored: Bool { content.snapsToAnchors || frameKey == nil }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -54,7 +83,11 @@ final class RecordingPanel: NSPanel {
     func show() {
         visibilityGeneration += 1
         if !isVisible {
-            moveToRememberedOrDefaultPosition()
+            if isAnchored {
+                setFrame(anchoredFrame(size: content.preferredSize, on: screenUnderMouse()), display: false)
+            } else {
+                moveToRememberedOrDefaultPosition()
+            }
             alphaValue = 0
         }
         orderFrontRegardless()
@@ -113,12 +146,74 @@ final class RecordingPanel: NSPanel {
             setFrame(target, display: true)
             if next.type == .leftMouseUp { break }
         }
-        if frame != startFrame { rememberFrame() }
+        guard frame != startFrame else { return }
+        if content.snapsToAnchors && edges.isEmpty {
+            snapToNearestAnchor()
+        } else {
+            rememberFrame()
+        }
+    }
+
+    // MARK: - Anchoring
+
+    /// Thirds of the screen pick left / centre / right; halves pick top / bottom.
+    private func snapToNearestAnchor() {
+        let surface = content.surfaceFrame.offsetBy(dx: frame.minX, dy: frame.minY)
+        let centre = NSPoint(x: surface.midX, y: surface.midY)
+        let screen = NSScreen.screens.first { $0.frame.contains(centre) } ?? self.screen ?? NSScreen.main
+        guard let area = screen?.visibleFrame else { return }
+        let top = centre.y > area.midY
+        let anchor: Anchor = if centre.x < area.minX + area.width / 3 {
+            top ? .topLeft : .bottomLeft
+        } else if centre.x > area.maxX - area.width / 3 {
+            top ? .topRight : .bottomRight
+        } else {
+            top ? .top : .bottom
+        }
+        if let style { UserDefaults.standard.set(anchor.rawValue, forKey: "panelAnchor.\(style)") }
+        content.anchor = anchor
+        let target = anchoredFrame(size: content.preferredSize, on: screen)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrame(target, display: true)
+        }
+    }
+
+    /// Follows the content's preferred size, keeping the anchored edge still: grows at
+    /// once (so a morph animation has room) and shrinks once the animation has played.
+    private func fitContent() {
+        let target = anchoredFrame(size: content.preferredSize, on: screen ?? screenUnderMouse())
+        shrinkWork?.cancel()
+        let grown = frame.union(target)
+        if grown != frame { setFrame(grown, display: true) }
+        guard grown != target else { return }
+        let work = DispatchWorkItem { [weak self] in self?.setFrame(target, display: true) }
+        shrinkWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func anchoredFrame(size: NSSize, on screen: NSScreen?) -> NSRect {
+        guard let area = (screen ?? NSScreen.main)?.visibleFrame else { return NSRect(origin: frame.origin, size: size) }
+        let anchor = content.anchor
+        let margin = content.edgeMargin
+        let inset = Self.snapInset
+        let x = anchor.isLeft ? area.minX + inset - margin
+            : anchor.isRight ? area.maxX - inset + margin - size.width
+            : area.midX - size.width / 2
+        let y = anchor.isTop ? area.maxY - inset + margin - size.height : area.minY + inset - margin
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private func screenUnderMouse() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
     }
 
     static func resetPositions() {
         for style in RecordingWindowStyle.allCases {
             UserDefaults.standard.removeObject(forKey: "panelFrame.\(style.rawValue)")
+            UserDefaults.standard.removeObject(forKey: "panelAnchor.\(style.rawValue)")
         }
     }
 

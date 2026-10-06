@@ -77,7 +77,7 @@ final class AppSettings {
         mode = d.string(forKey: "mode").flatMap(DictationMode.init) ?? .dictation
         language = d.string(forKey: "language").flatMap(SpeechLanguage.init) ?? .en
         recordingWindowStyle = .current
-        alwaysShowIndicator = d.bool(forKey: "alwaysShowIndicator")
+        alwaysShowIndicator = d.object(forKey: "alwaysShowIndicator") as? Bool ?? true
         microphoneUID = d.string(forKey: "microphoneUID")
         playSounds = d.object(forKey: "playSounds") as? Bool ?? true
         keepInClipboard = d.bool(forKey: "keepInClipboard")

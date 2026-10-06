@@ -67,12 +67,12 @@ struct RecordingSettings: View {
                     .padding(.vertical, 4)
                 Toggle("Always show", isOn: $settings.alwaysShowIndicator)
                     .disabled(settings.recordingWindowStyle == .none)
-                Text("Keeps a dimmed indicator on screen between dictations. It does no work while idle.")
+                Text("Keeps the small window on screen between dictations, asleep as a thin pill; hover it for Rewrite, Settings and Expand. It does no work while idle.")
                     .font(.callout).foregroundStyle(.secondary)
                 LabeledContent("Position") {
                     Button("Reset to Bottom Centre") { RecordingPanel.resetPositions() }
                 }
-                Text("Drag the recording window anywhere; Dictum remembers where you leave each style. The ↘↖ button on Classic collapses it to Mini.")
+                Text("Drag the small window to snap it to the top or bottom of the screen, centred or in a corner. The large window moves freely and resizes from its edges; its ↘↖ button returns to the small one.")
                     .font(.callout).foregroundStyle(.secondary)
             }
 
