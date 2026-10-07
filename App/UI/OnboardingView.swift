@@ -92,11 +92,11 @@ struct OnboardingView: View {
         switch engine.phase {
         case .installingRuntime: "Setting up a private Python runtime with MLX…"
         case .installingModel(let fraction, let converting):
-            converting ? "Converting Cohere Transcribe to 4-bit…" : "Downloading Cohere Transcribe… \(Int(fraction * 100)) %"
+            converting ? "Preparing \(AppSettings.shared.speechModel.title)…" : "Downloading \(AppSettings.shared.speechModel.title)… \(Int(fraction * 100)) %"
         case .starting, .checking: "Starting…"
-        case .ready: "Cohere Transcribe is ready, 4-bit, on this Mac."
+        case .ready: "\(AppSettings.shared.speechModel.title) is ready, on this Mac."
         case .failed(let message): message
-        case .needsSetup: "Downloads Cohere Transcribe (2.4 GB) and installs it for this Mac. Takes a few minutes."
+        case .needsSetup: "Downloads \(AppSettings.shared.speechModel.title) (\(AppSettings.shared.speechModel.download)) and installs it for this Mac. Takes a few minutes."
         }
     }
 

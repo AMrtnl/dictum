@@ -235,17 +235,22 @@ struct ModelSettings: View {
     var body: some View {
         Form {
             Section {
-                speechStatus
+                ForEach(SpeechModel.allCases) { model in
+                    SpeechModelCard(model: model)
+                }
+                if let error = engine.speechModelError {
+                    Text(error).font(.callout).foregroundStyle(.red)
+                }
                 Picker("Keep loaded", selection: $settings.speechKeepLoaded) {
                     ForEach([KeepLoaded.always, .oneHour, .fiveMinutes]) { Text($0.title).tag($0) }
                 }
                 .onChange(of: settings.speechKeepLoaded) { Task { await engine.applyKeepLoaded() } }
-                Text("“Always” makes every dictation instant and uses about 1.5 GB of memory. Shorter times free it between bursts of dictation; the next one then takes a few seconds longer.")
+                Text("“Always” makes every dictation instant. Shorter times free the model's memory between bursts of dictation; the next one then takes a few seconds longer.")
                     .font(.callout).foregroundStyle(.secondary)
             } header: {
-                Text("Speech — Cohere Transcribe")
+                Text("Speech")
             } footer: {
-                Text("4-bit, 14 languages, runs on this Mac. Apache 2.0.")
+                Text("Accuracy is word error rate on real English / French test speech (lower is better); speed is for a 10-second dictation on an M4 Pro. All models run on this Mac.")
             }
 
             Section {
@@ -267,32 +272,6 @@ struct ModelSettings: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    @ViewBuilder
-    private var speechStatus: some View {
-        switch engine.phase {
-        case .ready:
-            LabeledContent("Status") { GrantedLabel(text: "Ready") }
-        case .installingRuntime:
-            LabeledContent("Status") { ProgressView().controlSize(.small); Text("Setting up runtime…") }
-        case .installingModel(let fraction, let converting):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(converting ? "Converting to 4-bit…" : "Downloading… \(Int(fraction * 100)) %").font(.callout)
-                ProgressView(value: fraction)
-            }
-        case .checking, .starting:
-            LabeledContent("Status") { ProgressView().controlSize(.small) }
-        case .needsSetup:
-            LabeledContent("Status") {
-                Button("Install (2.4 GB download)") { Task { await engine.setUp() } }
-            }
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(message).font(.callout).foregroundStyle(.red)
-                Button("Try Again") { Task { await engine.setUp() } }
-            }
-        }
     }
 
     @ViewBuilder
@@ -319,6 +298,76 @@ struct ModelSettings: View {
                 Text(error).font(.callout).foregroundStyle(.red)
             }
         }
+    }
+}
+
+/// One speech model in the Models library: what it's good at, measured numbers, and actions.
+struct SpeechModelCard: View {
+    let model: SpeechModel
+    private let engine = SpeechEngine.shared
+    private let settings = AppSettings.shared
+
+    var body: some View {
+        let state = engine.speechModels[model] ?? .missing
+        let inUse = settings.speechModel == model
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(model.title).font(.system(size: 14, weight: .semibold))
+                Text(model.badge)
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                actions(state: state, inUse: inUse)
+            }
+            Text(model.summary).font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 16) {
+                metric("Accuracy", model.accuracy)
+                metric("Speed", model.speed)
+                metric("Memory", model.memory)
+                metric("Download", model.download)
+                if model.detectsLanguage { tag("Detects language", "globe") }
+                if model.usesVocabulary { tag("Vocabulary", "book.closed") }
+            }
+            if case .installing(let fraction) = state {
+                ProgressView(value: fraction)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func actions(state: SpeechEngine.ModelState, inUse: Bool) -> some View {
+        switch state {
+        case .installed where inUse:
+            GrantedLabel(text: "In use")
+        case .installed:
+            HStack(spacing: 6) {
+                Button("Remove") { Task { await engine.removeSpeechModel(model) } }
+                Button("Use") { Task { await engine.use(model) } }.buttonStyle(.borderedProminent)
+            }
+        case .installing(let fraction):
+            Text(fraction >= 0.999 ? "Preparing…" : "\(Int(fraction * 100)) %")
+                .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+        case .missing:
+            Button("Download") { Task { await engine.installSpeechModel(model) } }
+                .disabled(engine.isBusySettingUp && !inUse)
+        }
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func tag(_ text: String, _ symbol: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
     }
 }
 

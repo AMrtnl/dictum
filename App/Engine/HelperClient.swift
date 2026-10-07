@@ -8,11 +8,12 @@ nonisolated struct HelperRequest: Encodable, Sendable {
     var language: String?
     var text: String?
     var model: String?
+    var vocabulary: [String]?
     var asrIdle: Int?
     var rewriteIdle: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, op, path, language, text, model
+        case id, op, path, language, text, model, vocabulary
         case asrIdle = "asr_idle", rewriteIdle = "rewrite_idle"
     }
 }
@@ -24,7 +25,8 @@ nonisolated struct HelperMessage: Decodable, Sendable {
     var text: String?
     var applied: Bool?
     var seconds: Double?
-    var asr: String?
+    var language: String?
+    var models: [String: String]?
     var rewrite: String?
     var event: String?
     var model: String?

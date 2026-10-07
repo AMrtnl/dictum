@@ -248,7 +248,7 @@ final class DictationController {
                 // The verbatim transcript is the training label; a rewrite is kept alongside.
                 TrainingDataStore.shared.add(take: take.url, transcription: original ?? text,
                                              rewrite: original == nil ? nil : text,
-                                             language: language.rawValue, duration: take.duration)
+                                             language: language, duration: take.duration)
             }
             discard(take)
             finish()
@@ -257,7 +257,7 @@ final class DictationController {
             if settings.saveHistory {
                 HistoryStore.shared.add(HistoryEntry(
                     text: text, original: original, duration: take.duration,
-                    mode: mode.rawValue, language: language.rawValue, app: app,
+                    mode: mode.rawValue, language: language, app: app,
                     appBundleID: frontmost?.bundleIdentifier))
             }
             if let note { showToast(note, symbol: "info.circle.fill") }
@@ -269,23 +269,33 @@ final class DictationController {
         }
     }
 
-    /// Transcribes with automatic language detection when it's on: first pass with the
-    /// last language used, then — if the text turns out to be another of the user's
-    /// languages — a second pass with that language's hint (~0.25 s).
-    private func transcribe(_ url: URL) async throws -> (String, SpeechLanguage) {
+    /// Transcribes the take and returns the text with its language code.
+    ///
+    /// Models that detect the language (Qwen3, Nemotron) do it themselves, phrase by phrase,
+    /// so one dictation can mix languages; Vocabulary words are passed as hints. For Cohere,
+    /// which needs a language, Dictum transcribes with the last language used and — if the
+    /// text turns out to be another of the user's languages — again with that one (~0.25 s).
+    private func transcribe(_ url: URL) async throws -> (String, String) {
+        let model = settings.speechModel
+        if model.detectsLanguage {
+            let hint: SpeechLanguage? = settings.autoLanguage ? nil : settings.language
+            let words = model.usesVocabulary ? VocabularyStore.shared.terms.map(\.word) : []
+            let result = try await engine.transcribe(url, language: hint, vocabulary: words)
+            return (result.text, result.language ?? hint?.rawValue ?? "en")
+        }
         guard settings.autoLanguage, settings.spokenLanguages.count > 1 else {
             let language = settings.autoLanguage ? (settings.spokenLanguages.first ?? settings.language) : settings.language
-            return (try await engine.transcribe(url, language: language), language)
+            return (try await engine.transcribe(url, language: language).text, language.rawValue)
         }
         let spoken = settings.spokenLanguages
         let hint = settings.lastLanguage.flatMap { spoken.contains($0) ? $0 : nil } ?? spoken[0]
-        let first = try await engine.transcribe(url, language: hint)
+        let first = try await engine.transcribe(url, language: hint).text
         guard let detected = LanguageDetector.detect(first, among: spoken), detected != hint else {
-            return (first, hint)
+            return (first, hint.rawValue)
         }
         log.info("language: \(hint.rawValue, privacy: .public) → \(detected.rawValue, privacy: .public)")
         settings.lastLanguage = detected
-        return (try await engine.transcribe(url, language: detected), detected)
+        return (try await engine.transcribe(url, language: detected).text, detected.rawValue)
     }
 
     private func deliver(_ text: String) {

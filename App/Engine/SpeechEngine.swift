@@ -5,8 +5,8 @@ import OSLog
 /// Owns the Python runtime and the inference helper process.
 ///
 /// Setup: `uv` (or a Python ≥ 3.13) creates a private virtualenv with mlx-speech and
-/// mlx-lm, then the helper downloads the models and converts them to 4-bit.
-/// Runtime: the helper keeps Cohere Transcribe loaded; Tiny Aya is loaded on demand.
+/// mlx-lm, then the helper downloads the chosen speech model (and, on request, Tiny Aya).
+/// Runtime: the helper keeps the chosen speech model loaded; Tiny Aya is loaded on demand.
 @Observable
 final class SpeechEngine {
     enum Phase: Equatable {
@@ -26,6 +26,8 @@ final class SpeechEngine {
     static let shared = SpeechEngine()
 
     private(set) var phase: Phase = .checking
+    private(set) var speechModels: [SpeechModel: ModelState] = [:]
+    private(set) var speechModelError: String?
     private(set) var rewriteModel: ModelState = .missing
     private(set) var rewriteError: String?
 
@@ -71,7 +73,7 @@ final class SpeechEngine {
             }
             try await startHelper()
             if !isReady {
-                try await installModel("asr")
+                try await installModel(AppSettings.shared.speechModel.rawValue)
             }
         } catch {
             log.error("setup failed: \(error.localizedDescription, privacy: .public)")
@@ -87,10 +89,41 @@ final class SpeechEngine {
 
     // MARK: - Requests
 
-    func transcribe(_ take: URL, language: SpeechLanguage) async throws -> String {
-        let reply = try await request(
-            HelperRequest(op: "transcribe", path: take.path, language: language.rawValue), timeout: 120)
-        return reply.text ?? ""
+    /// Transcribes with the chosen model. `language` nil lets models that detect the
+    /// language do so; returns the text and the language code the model reports.
+    func transcribe(_ take: URL, language: SpeechLanguage?, vocabulary: [String] = []) async throws
+        -> (text: String, language: String?) {
+        var request = HelperRequest(op: "transcribe", path: take.path, language: language?.rawValue,
+                                    model: AppSettings.shared.speechModel.rawValue)
+        request.vocabulary = vocabulary.isEmpty ? nil : vocabulary
+        let reply = try await self.request(request, timeout: 300)
+        return (reply.text ?? "", reply.language)
+    }
+
+    /// Downloads another speech model (shown in the Models library).
+    func installSpeechModel(_ model: SpeechModel) async {
+        speechModelError = nil
+        do {
+            try await installModel(model.rawValue)
+        } catch {
+            speechModels[model] = .missing
+            speechModelError = error.localizedDescription
+        }
+    }
+
+    func removeSpeechModel(_ model: SpeechModel) async {
+        guard model != AppSettings.shared.speechModel else { return }
+        if let reply = try? await request(HelperRequest(op: "remove", model: model.rawValue), timeout: 30) {
+            apply(reply)
+        }
+    }
+
+    /// Switches to `model` and loads it in the background, so the next dictation is instant.
+    func use(_ model: SpeechModel) async {
+        AppSettings.shared.speechModel = model
+        if let reply = try? await request(HelperRequest(op: "select", model: model.rawValue), timeout: 120) {
+            apply(reply)
+        }
     }
 
     /// Returns the cleaned text, or the input unchanged if the rewrite drifted from it.
@@ -169,6 +202,7 @@ final class SpeechEngine {
             script.path, "--socket", Paths.socket, "--models", Paths.models.path,
             "--asr-idle", String(settings.speechKeepLoaded.rawValue),
             "--rewrite-idle", String(settings.rewriteKeepLoaded.rawValue),
+            "--speech-model", settings.speechModel.rawValue,
         ]
         var environment = ProcessInfo.processInfo.environment
         environment["HF_HOME"] = Paths.huggingFaceHome.path
@@ -214,10 +248,20 @@ final class SpeechEngine {
     }
 
     private func apply(_ status: HelperMessage) {
-        switch status.asr {
-        case "installed", "loaded": phase = .ready
-        case "missing": phase = .needsSetup
-        default: break
+        for (name, state) in status.models ?? [:] {
+            guard let model = SpeechModel(rawValue: name) else { continue }
+            switch state {
+            case "installed", "loaded": speechModels[model] = .installed
+            case "missing": speechModels[model] = .missing
+            default: break
+            }
+        }
+        if status.models != nil {
+            switch speechModels[AppSettings.shared.speechModel] {
+            case .installed: phase = .ready
+            case .missing, nil: if !isBusySettingUp || phase == .starting { phase = .needsSetup }
+            case .installing: break
+            }
         }
         switch status.rewrite {
         case "installed", "loaded": rewriteModel = .installed
@@ -227,7 +271,12 @@ final class SpeechEngine {
     }
 
     private func installModel(_ name: String) async throws {
-        if name == "asr" { phase = .installingModel(fraction: 0, converting: false) } else { rewriteModel = .installing(0) }
+        if name == "rewrite" {
+            rewriteModel = .installing(0)
+        } else if let model = SpeechModel(rawValue: name) {
+            speechModels[model] = .installing(0)
+            if model == AppSettings.shared.speechModel { phase = .installingModel(fraction: 0, converting: false) }
+        }
         let reply = try await request(HelperRequest(op: "install", model: name), timeout: nil) { event in
             Task { @MainActor in self.progress(event) }
         }
@@ -246,10 +295,13 @@ final class SpeechEngine {
 
     private func progress(_ event: HelperMessage) {
         let fraction = event.fraction ?? 0
-        if event.model == "asr" {
-            phase = .installingModel(fraction: fraction, converting: event.phase == "convert")
-        } else {
+        if event.model == "rewrite" {
             rewriteModel = .installing(fraction)
+        } else if let model = event.model.flatMap(SpeechModel.init) {
+            speechModels[model] = .installing(fraction)
+            if model == AppSettings.shared.speechModel {
+                phase = .installingModel(fraction: fraction, converting: event.phase == "convert")
+            }
         }
     }
 

@@ -1,12 +1,13 @@
 """Dictum inference helper.
 
 Launched by Dictum.app with the Python runtime in ~/Library/Application Support/Dictum/runtime.
-Does all model work: Cohere Transcribe (kept loaded) and Tiny Aya rewrite (loaded on
-demand, unloaded after 60 s idle). Talks to the app over a Unix socket, one JSON object
+Does all model work: a speech model (Qwen3-ASR, Cohere Transcribe or Nemotron, kept
+loaded) and Tiny Aya rewrite (loaded on demand, unloaded after 60 s idle). Talks to the app over a Unix socket, one JSON object
 per line:
 
-    -> {"op": "transcribe", "path": "/.../take.wav", "language": "en"}
-    <- {"ok": true, "text": "...", "seconds": 0.21}
+    -> {"op": "transcribe", "path": "/.../take.wav", "model": "qwen3", "language": null,
+        "vocabulary": ["Dictum"]}
+    <- {"ok": true, "text": "...", "language": "fr", "seconds": 0.62}
 
 Long operations ("install") stream {"event": "progress", ...} lines before the final
 {"ok": ...} line. The helper exits when its stdin closes, i.e. when the app goes away,
@@ -28,14 +29,94 @@ import time
 import traceback
 from pathlib import Path
 
-ASR_REPO = "appautomaton/cohere-asr-mlx"
-ASR_SUBDIR = "mlx-int8"
-ASR_DIR = "cohere-transcribe-4bit"
 REWRITE_REPO = "mlx-community/tiny-aya-global-8bit-mlx"
 REWRITE_DIR = "tiny-aya-global-4bit"
 QUANT_BITS, QUANT_GROUP = 4, 64
 
+# Speech models, all through mlx-speech. Benchmarked on FLEURS EN/FR (M4 Pro):
+#   qwen3    WER EN 3.3 / FR 5.2, detects the language, takes vocabulary hints; ~0.6 s per 10 s.
+#   cohere   WER EN 4.8 / FR 5.6, needs a language, can't mix languages; ~0.2 s, lightest RAM.
+#   nemotron WER EN 9.8 / FR 12.8, detects the language, 0.8 GB; ~0.3 s.
+SPEECH_MODELS = {
+    "qwen3": {"repo": "appautomaton/qwen3-asr-1.7b-int8-mlx", "dir": "qwen3-asr-1.7b-int8", "auto_language": True},
+    "cohere": {"repo": "appautomaton/cohere-asr-mlx", "subdir": "mlx-int8", "dir": "cohere-transcribe-4bit",
+               "auto_language": False},
+    "nemotron": {"repo": "appautomaton/nemotron-3.5-asr-streaming-0.6b-int8-mlx", "dir": "nemotron-asr-0.6b-int8",
+                 "auto_language": True},
+}
+
 LANGUAGES = {"ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh"}
+LANGUAGE_NAMES = {
+    "en": "English", "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese",
+    "nl": "Dutch", "pl": "Polish", "el": "Greek", "ar": "Arabic", "ja": "Japanese", "ko": "Korean",
+    "zh": "Chinese", "vi": "Vietnamese", "ru": "Russian",
+}
+LOCALES = {"en": "en-US", "fr": "fr-FR", "de": "de-DE", "es": "es-ES", "it": "it-IT", "pt": "pt-PT",
+           "nl": "nl-NL", "pl": "pl-PL", "ja": "ja-JP", "ko": "ko-KR", "zh": "zh-CN", "ru": "ru-RU"}
+
+
+def language_code(value: str | None) -> str | None:
+    """'French' / 'fr-FR' / 'fr' → 'fr'."""
+    if not value:
+        return None
+    value = value.strip()
+    for code, name in LANGUAGE_NAMES.items():
+        if value.lower() == name.lower():
+            return code
+    return value.split("-")[0].lower()[:3] or None
+
+
+def speech_segments(audio, rate: int = 16000, min_pause: float = 0.8, min_length: float = 5.0,
+                    max_length: float = 25.0) -> list[tuple[int, int]]:
+    """Splits a take at clear pauses so each stretch is transcribed on its own: a switch
+    between languages usually falls on a pause, long takes stay within the models' sweet
+    spot, and near-silent stretches (where models hallucinate) are dropped.
+
+    Tuned on FLEURS + mixed FR/EN takes with Qwen3: these settings leave single-language
+    WER unchanged (EN 2.3 %, FR 6.7 %) and fix mixed takes (15.1 % → 3.4 %)."""
+    import numpy as np
+
+    frame = rate // 50  # 20 ms
+    frames = len(audio) // frame
+    if frames == 0:
+        return [(0, len(audio))]
+    rms = np.sqrt(np.mean(audio[: frames * frame].reshape(frames, frame) ** 2, axis=1) + 1e-12)
+    loud = float(np.percentile(rms, 90))
+    if loud < 1e-4:
+        return []
+    quiet = rms < max(loud * 0.1, 3e-4)
+
+    cuts, i, need = [], 0, int(min_pause * 50)
+    while i < frames:
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < frames and quiet[j]:
+            j += 1
+        if j - i >= need and i > 0 and j < frames:
+            cuts.append((i + j) // 2)
+        i = j
+
+    bounds = [0, *cuts, frames]
+    merged: list[list[int]] = []
+    for start, end in zip(bounds, bounds[1:]):
+        if merged and (end - start < min_length * 50 or merged[-1][1] - merged[-1][0] < min_length * 50):
+            merged[-1][1] = end
+        else:
+            merged.append([start, end])
+
+    pieces: list[tuple[int, int]] = []
+    for start, end in merged:
+        while end - start > max_length * 50:  # cut over-long stretches at their quietest moment
+            lo, hi = start + int(max_length * 25), start + int(max_length * 50)
+            cut = lo + int(np.argmin(rms[lo:hi]))
+            pieces.append((start, cut))
+            start = cut
+        pieces.append((start, end))
+
+    kept = [(a, b) for a, b in pieces if float(rms[a:b].max()) >= loud * 0.25]
+    return [(a * frame, min(b * frame, len(audio))) for a, b in kept] or [(0, len(audio))]
 
 
 def log(message: str) -> None:
@@ -105,7 +186,8 @@ class Models:
     def __init__(self, root: Path, asr_idle: float, rewrite_idle: float):
         self.root = root
         self.lock = threading.Lock()  # MLX work is serialized
-        self.asr = None
+        self.asr = None  # the loaded speech model
+        self.asr_name: str | None = None
         self.rewriter = None  # (model, tokenizer)
         # Seconds a model stays loaded after its last use; 0 keeps it loaded.
         self.idle = {"asr": asr_idle, "rewrite": rewrite_idle}
@@ -135,7 +217,7 @@ class Models:
             if name == "asr":
                 if self.asr is None:
                     return
-                self.asr = None
+                self.asr, self.asr_name = None, None
             else:
                 if self.rewriter is None:
                     return
@@ -153,8 +235,13 @@ class Models:
                 elif timer := self.timers.pop(name, None):
                     timer.cancel()
 
+    @staticmethod
+    def canonical(name: str) -> str:
+        return "cohere" if name == "asr" else name
+
     def path(self, name: str) -> Path:
-        return self.root / (ASR_DIR if name == "asr" else REWRITE_DIR)
+        name = self.canonical(name)
+        return self.root / (REWRITE_DIR if name == "rewrite" else SPEECH_MODELS[name]["dir"])
 
     def installed(self, name: str) -> bool:
         return (self.path(name) / "config.json").exists()
@@ -168,44 +255,79 @@ class Models:
             return "loaded" if loaded else "installed"
 
         return {
-            "asr": state("asr", self.asr is not None),
+            "models": {name: state(name, self.asr_name == name) for name in SPEECH_MODELS},
             "rewrite": state("rewrite", self.rewriter is not None),
         }
 
     # -- speech to text ----------------------------------------------------
 
-    def load_asr(self) -> None:
-        if self.asr is not None or not self.installed("asr"):
+    def load_speech(self, name: str) -> None:
+        """Loads `name` (unloading any other speech model). Call with the lock held."""
+        if self.asr is not None and self.asr_name == name:
             return
+        if not self.installed(name):
+            raise RuntimeError(f"The {name} speech model is not installed.")
         import mlx.core as mx
         import numpy as np
-        from mlx_speech.generation import CohereAsrModel
 
-        started = time.time()
-        self.asr = CohereAsrModel.from_dir(self.path("asr"))
-        # The first call compiles kernels; do it now instead of on the first dictation.
-        self.asr.transcribe(np.zeros(16000, dtype=np.float32), language="en")
+        self.asr, self.asr_name = None, None
+        gc.collect()
         mx.clear_cache()
-        log(f"speech model ready in {time.time() - started:.1f}s")
+        started = time.time()
+        silence = np.zeros(16000, dtype=np.float32)
+        if name == "cohere":
+            from mlx_speech.generation import CohereAsrModel
 
-    def transcribe(self, path: str, language: str) -> str:
+            model = CohereAsrModel.from_dir(self.path(name))
+            model.transcribe(silence, language="en")  # compile kernels now, not on the first dictation
+        else:
+            import mlx_speech
+
+            model = mlx_speech.asr.load(str(self.path(name)))
+            model.generate(silence, sample_rate=16000)
+        mx.clear_cache()
+        self.asr, self.asr_name = model, name
+        log(f"speech model {name} ready in {time.time() - started:.1f}s")
+
+    def transcribe(self, path: str, name: str, language: str | None, vocabulary: list[str]) -> tuple[str, str]:
+        """Returns (text, language code). With `language` None, models that detect the
+        language do so phrase by phrase, so a take can mix languages."""
         import mlx.core as mx
         import soundfile as sf
 
+        name = self.canonical(name)
         with self.lock:
-            self.load_asr()
-            if self.asr is None:
-                raise RuntimeError("Speech model is not installed.")
+            self.load_speech(name)
             audio, rate = sf.read(path, dtype="float32", always_2d=False)
             if rate != 16000:
                 raise RuntimeError(f"Expected 16 kHz audio, got {rate} Hz.")
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
-            language = language if language in LANGUAGES else "en"
-            text = self.asr.transcribe(audio, sample_rate=16000, language=language).text.strip()
+
+            if name == "cohere":
+                code = language if language in LANGUAGES else "en"
+                text = self.asr.transcribe(audio, sample_rate=16000, language=code).text.strip()
+            else:
+                texts, durations = [], {}
+                for start, end in speech_segments(audio):
+                    kwargs = {}
+                    if name == "qwen3":
+                        kwargs["language"] = LANGUAGE_NAMES.get(language) if language else None
+                        if vocabulary:
+                            kwargs["context"] = ", ".join(vocabulary)
+                    else:
+                        kwargs["language"] = LOCALES.get(language, "auto") if language else "auto"
+                    out = self.asr.generate(audio[start:end], sample_rate=16000, **kwargs)
+                    piece = (out.text or "").strip()
+                    if piece:
+                        texts.append(piece)
+                        detected = language_code(out.language) or language or "en"
+                        durations[detected] = durations.get(detected, 0) + (end - start)
+                text = " ".join(texts)
+                code = max(durations, key=durations.get) if durations else (language or "en")
             mx.clear_cache()
             self.touch("asr")
-            return text
+            return text, code
 
     # -- rewrite -------------------------------------------------------------
 
@@ -245,18 +367,17 @@ class Models:
     # -- install ---------------------------------------------------------------
 
     def install(self, name: str, emit) -> None:
+        name = self.canonical(name)
         if self.installed(name):
             return
         from huggingface_hub import HfApi, snapshot_download
 
-        repo = ASR_REPO if name == "asr" else REWRITE_REPO
-        patterns = [f"{ASR_SUBDIR}/*"] if name == "asr" else None
+        spec = {"repo": REWRITE_REPO} if name == "rewrite" else SPEECH_MODELS[name]
+        repo, subdir = spec["repo"], spec.get("subdir")
+        patterns = [f"{subdir}/*"] if subdir else None
         download = self.root / ".download" / name
         info = HfApi().model_info(repo, files_metadata=True)
-        total = sum(
-            (s.size or 0) for s in info.siblings
-            if patterns is None or s.rfilename.startswith(f"{ASR_SUBDIR}/")
-        )
+        total = sum((s.size or 0) for s in info.siblings if subdir is None or s.rfilename.startswith(f"{subdir}/"))
 
         self.installing.add(name)
         done = threading.Event()
@@ -273,15 +394,17 @@ class Models:
             log(f"downloading {repo} ({total / 1e9:.2f} GB)")
             snapshot_download(repo, local_dir=download, allow_patterns=patterns)
             done.set()
-            emit({"event": "progress", "model": name, "phase": "convert", "fraction": 1.0})
             target = self.path(name)
             staging = target.with_name(target.name + ".partial")
             shutil.rmtree(staging, ignore_errors=True)
-            with self.lock:
-                if name == "asr":
-                    convert_asr(download / ASR_SUBDIR, staging)
-                else:
-                    convert_rewriter(download, staging)
+            source = download / subdir if subdir else download
+            if name in ("cohere", "rewrite"):
+                emit({"event": "progress", "model": name, "phase": "convert", "fraction": 1.0})
+                with self.lock:
+                    convert_asr(source, staging) if name == "cohere" else convert_rewriter(source, staging)
+            else:
+                shutil.rmtree(source / ".cache", ignore_errors=True)  # huggingface_hub bookkeeping
+                shutil.move(str(source), staging)
             staging.rename(target)
             shutil.rmtree(download, ignore_errors=True)
             try:
@@ -294,11 +417,12 @@ class Models:
             self.installing.discard(name)
 
     def remove(self, name: str) -> None:
+        name = self.canonical(name)
         with self.lock:
-            if name == "asr":
-                self.asr = None
-            else:
+            if name == "rewrite":
                 self.rewriter = None
+            elif self.asr_name == name:
+                self.asr, self.asr_name = None, None
             gc.collect()
             shutil.rmtree(self.path(name), ignore_errors=True)
 
@@ -362,17 +486,20 @@ def handle(models: Models, request: dict, emit) -> dict:
         return {"ok": True, **models.status()}
     if op == "transcribe":
         started = time.time()
-        text = models.transcribe(request["path"], request.get("language", "en"))
-        return {"ok": True, "text": text, "seconds": round(time.time() - started, 3)}
+        text, language = models.transcribe(request["path"], request.get("model", "cohere"),
+                                           request.get("language"), request.get("vocabulary") or [])
+        return {"ok": True, "text": text, "language": language, "seconds": round(time.time() - started, 3)}
+    if op == "select":  # preload a speech model so the next dictation doesn't wait for it
+        with models.lock:
+            models.load_speech(models.canonical(request["model"]))
+            models.touch("asr")
+        return {"ok": True, **models.status()}
     if op == "rewrite":
         started = time.time()
         text, applied = models.rewrite(request["text"])
         return {"ok": True, "text": text, "applied": applied, "seconds": round(time.time() - started, 3)}
     if op == "install":
         models.install(request["model"], emit)
-        if request["model"] == "asr":
-            with models.lock:
-                models.load_asr()
         return {"ok": True, **models.status()}
     if op == "configure":
         models.configure(float(request["asr_idle"]), float(request["rewrite_idle"]))
@@ -414,6 +541,7 @@ def main() -> None:
     parser.add_argument("--models", required=True)
     parser.add_argument("--asr-idle", type=float, default=0, help="seconds; 0 keeps it loaded")
     parser.add_argument("--rewrite-idle", type=float, default=60, help="seconds; 0 keeps it loaded")
+    parser.add_argument("--speech-model", default="qwen3", choices=sorted(SPEECH_MODELS))
     args = parser.parse_args()
 
     models = Models(Path(args.models), args.asr_idle, args.rewrite_idle)
@@ -438,8 +566,9 @@ def main() -> None:
     def warm_up() -> None:
         with models.lock:
             try:
-                models.load_asr()
-                models.touch("asr")
+                if models.installed(args.speech_model):
+                    models.load_speech(args.speech_model)
+                    models.touch("asr")
             except Exception as error:
                 log(f"could not load speech model: {error}")
 
