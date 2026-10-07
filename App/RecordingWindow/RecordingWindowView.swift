@@ -71,7 +71,11 @@ class RecordingWindowView: NSView {
     var snapsToAnchors: Bool { false }
     /// Which screen edge/corner the panel is attached to; the surface hugs that side.
     var anchor: RecordingPanel.Anchor = .bottom {
-        didSet { if anchor != oldValue { withoutAnimation { layoutSurface() } } }
+        didSet { if anchor != oldValue { anchorDidChange() } }
+    }
+
+    func anchorDidChange() {
+        withoutAnimation { layoutSurface() }
     }
     /// Distance from the window's edge to the surface on the anchored sides (shadow room).
     var edgeMargin: CGFloat { 12 }

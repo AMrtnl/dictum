@@ -26,6 +26,7 @@ final class DictationController {
     @ObservationIgnored private let recorder = AudioRecorder()
     @ObservationIgnored private var panel: RecordingPanel?
     @ObservationIgnored private var panelConfig: PanelConfig?
+    @ObservationIgnored private var retiringPanels: [RecordingPanel] = []
     @ObservationIgnored private var toast: RecordingPanel?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var activeMode: DictationMode = .dictation
@@ -305,7 +306,13 @@ final class DictationController {
     private func currentPanel(for shortcut: KeyboardShortcuts.Name = .pushToTalk) -> RecordingPanel? {
         let config = PanelConfig(style: settings.recordingWindowStyle, stopKeys: Self.keys(for: shortcut))
         if config != panelConfig {
-            panel?.orderOut(nil)
+            if let old = panel {  // cross-fade: keep the old window alive while it fades out
+                retiringPanels.append(old)
+                old.hide()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.retiringPanels.removeAll { $0 === old }
+                }
+            }
             panelConfig = config
             let view: RecordingWindowView? = switch config.style {
             case .mini: MiniRecordingView()

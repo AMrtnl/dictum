@@ -28,7 +28,6 @@ final class RecordingPanel: NSPanel {
 
     let content: RecordingWindowView
 
-    private static let bottomInset: CGFloat = 8
     /// Gap between a snapped surface and the screen edge.
     private static let snapInset: CGFloat = 10
     private var visibilityGeneration = 0
@@ -193,15 +192,18 @@ final class RecordingPanel: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
-    private func anchoredFrame(size: NSSize, on screen: NSScreen?) -> NSRect {
+    /// The frame that puts the content's surface `snapInset` from the chosen screen edge/corner.
+    private func anchoredFrame(size: NSSize, on screen: NSScreen?, anchor: Anchor? = nil) -> NSRect {
         guard let area = (screen ?? NSScreen.main)?.visibleFrame else { return NSRect(origin: frame.origin, size: size) }
-        let anchor = content.anchor
-        let margin = content.edgeMargin
+        let anchor = anchor ?? content.anchor
+        let surface = content.surfaceFrame
+        let bounds = content.bounds
         let inset = Self.snapInset
-        let x = anchor.isLeft ? area.minX + inset - margin
-            : anchor.isRight ? area.maxX - inset + margin - size.width
+        let x = anchor.isLeft ? area.minX + inset - surface.minX
+            : anchor.isRight ? area.maxX - inset + (bounds.maxX - surface.maxX) - size.width
             : area.midX - size.width / 2
-        let y = anchor.isTop ? area.maxY - inset + margin - size.height : area.minY + inset - margin
+        let y = anchor.isTop ? area.maxY - inset + (bounds.maxY - surface.maxY) - size.height
+            : area.minY + inset - surface.minY
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
@@ -237,8 +239,8 @@ final class RecordingPanel: NSPanel {
                         content.maximumSurfaceSize.height + margins.height))
     }
 
-    /// Where the user last left it if that spot is still on a screen, else bottom-centre
-    /// of the screen under the pointer, above the Dock.
+    /// Where the user last left it if that spot is still on a screen; otherwise the corner
+    /// or edge the small window is snapped to, so expanding grows out of the same spot.
     private func moveToRememberedOrDefaultPosition() {
         if let saved = savedFrame {
             let rect = NSRect(origin: saved.origin, size: frame.size)
@@ -247,10 +249,7 @@ final class RecordingPanel: NSPanel {
                 return
             }
         }
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
-        else { return }
-        let area = screen.visibleFrame
-        setFrameOrigin(NSPoint(x: area.midX - frame.width / 2, y: area.minY + Self.bottomInset))
+        let anchor = Anchor.saved(for: RecordingWindowStyle.mini.rawValue)
+        setFrame(anchoredFrame(size: frame.size, on: screenUnderMouse(), anchor: anchor), display: false)
     }
 }

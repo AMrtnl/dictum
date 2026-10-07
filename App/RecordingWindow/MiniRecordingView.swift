@@ -30,6 +30,10 @@ final class MiniRecordingView: RecordingWindowView {
 
     private let capsule = CALayer()
     private let hoverPad = CALayer()
+    /// Zero-size layers pinned to the capsule's centre: their contents grow from the
+    /// middle as the capsule morphs, instead of sliding with its corner.
+    private let barRow = CALayer()
+    private let buttonRow = CALayer()
     private let bars = (0..<barCount).map { _ in CALayer() }
     private var buttons: [Button] = []
     private let tooltip = CALayer()
@@ -40,11 +44,13 @@ final class MiniRecordingView: RecordingWindowView {
     private var collapseWork: DispatchWorkItem?
     private var hoverPoll: Timer?
 
+    /// One fixed window size for every state, so morphs are pure layer animation and
+    /// the window never resizes under them. Its transparent part lets clicks through.
+    private static let windowSize = NSSize(width: toolbarSize.width + 2 * margin,
+                                           height: toolbarSize.height + 2 * margin + tooltipZone)
+
     init() {
-        super.init(
-            size: NSSize(width: Self.activeSize.width + 2 * Self.margin, height: Self.activeSize.height + 2 * Self.margin),
-            historyLength: Self.barCount / 2 + 1
-        )
+        super.init(size: Self.windowSize, historyLength: Self.barCount / 2 + 1)
         // A nearly invisible pad widens the hover target around the thin sleeping pill.
         hoverPad.backgroundColor = NSColor.white.withAlphaComponent(0.004).cgColor
         layer?.addSublayer(hoverPad)
@@ -54,11 +60,17 @@ final class MiniRecordingView: RecordingWindowView {
         capsule.shadowOffset = CGSize(width: 0, height: -2)
         layer?.addSublayer(capsule)
 
-        for bar in bars {
+        for row in [barRow, buttonRow] {
+            row.bounds = .zero
+            capsule.addSublayer(row)
+        }
+        let span = CGFloat(Self.barCount - 1) * Self.barStep + Self.barWidth
+        for (index, bar) in bars.enumerated() {
             bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: Self.barWidth)
+            bar.position = CGPoint(x: -span / 2 + CGFloat(index) * Self.barStep + Self.barWidth / 2, y: 0)
             bar.cornerRadius = Self.barWidth / 2
             bar.backgroundColor = NSColor.white.withAlphaComponent(0.95).cgColor
-            capsule.addSublayer(bar)
+            barRow.addSublayer(bar)
         }
 
         buttons = [
@@ -68,16 +80,19 @@ final class MiniRecordingView: RecordingWindowView {
             Button(tooltip: { "Expand window" }, action: { [unowned self] in onToggleSize?() }),
         ]
         let symbols = ["sparkle", "waveform", "arrow.up.left.and.arrow.down.right"]
-        for (button, symbol) in zip(buttons, symbols) {
+        for (index, (button, symbol)) in zip(buttons, symbols).enumerated() {
+            let centre = CGPoint(x: CGFloat(index - 1) * (Self.buttonSize + Self.buttonGap), y: 0)
             button.highlight.bounds = CGRect(x: 0, y: 0, width: Self.buttonSize, height: Self.buttonSize)
+            button.highlight.position = centre
             button.highlight.cornerRadius = Self.buttonSize / 2
+            button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
             button.highlight.opacity = 0
             button.icon.bounds = CGRect(x: 0, y: 0, width: 18, height: 18)
+            button.icon.position = centre
             button.icon.contentsGravity = .resizeAspect
             button.icon.contents = Self.symbol(symbol)
-            button.icon.opacity = 0
-            capsule.addSublayer(button.highlight)
-            capsule.addSublayer(button.icon)
+            buttonRow.addSublayer(button.highlight)
+            buttonRow.addSublayer(button.icon)
         }
 
         tooltip.cornerRadius = 9
@@ -101,11 +116,7 @@ final class MiniRecordingView: RecordingWindowView {
     override var edgeMargin: CGFloat { Self.margin }
     override var surfaceFrame: CGRect { capsule.frame }
 
-    override var preferredSize: NSSize {
-        let size = Self.size(of: visual)
-        let extra = visual == .toolbar ? Self.tooltipZone : 0
-        return NSSize(width: size.width + 2 * Self.margin, height: size.height + 2 * Self.margin + extra)
-    }
+    override var preferredSize: NSSize { Self.windowSize }
 
     private static func size(of visual: Visual) -> CGSize {
         switch visual {
@@ -125,28 +136,45 @@ final class MiniRecordingView: RecordingWindowView {
     }
 
     override func layoutSurface() {
-        // The window grew or shrank around the anchored edge: re-pin, keeping the current size.
         capsule.frame = anchoredRect(capsule.bounds.size)
         updateShadowPath(capsule)
+        for row in [barRow, buttonRow] { row.position = CGPoint(x: capsule.bounds.midX, y: capsule.bounds.midY) }
         hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
         if hoveredButton != nil { positionTooltip() }
+    }
+
+    /// Snapped to another edge: glide the shape to that side of the window.
+    override func anchorDidChange() {
+        apply(visual, animated: window?.isVisible == true)
     }
 
     // MARK: States
 
     private func apply(_ next: Visual, animated: Bool) {
         visual = next
-        onPreferredSizeChange?()  // grows the window now if the new shape needs room
-
         let size = Self.size(of: next)
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(animated ? 0.24 : 0)
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1))
-        CATransaction.setDisableActions(!animated)
+        let frame = anchoredRect(size)
+        let centre = CGPoint(x: size.width / 2, y: size.height / 2)
 
-        capsule.frame = anchoredRect(size)
-        capsule.cornerRadius = size.height / 2
-        updateShadowPath(capsule)
+        // Geometry: one spring for shape, corners, shadow and the centred rows, set
+        // explicitly so every property moves on the same curve.
+        withoutAnimation {
+            spring(capsule, "bounds", NSValue(rect: CGRect(origin: .zero, size: size)), animated)
+            spring(capsule, "position", NSValue(point: CGPoint(x: frame.midX, y: frame.midY)), animated)
+            spring(capsule, "cornerRadius", size.height / 2, animated)
+            spring(capsule, "shadowPath",
+                   CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: size.height / 2,
+                          cornerHeight: size.height / 2, transform: nil), animated)
+            for row in [barRow, buttonRow] { spring(row, "position", NSValue(point: centre), animated) }
+            spring(buttonRow, "transform", CATransform3DMakeScale(next == .toolbar ? 1 : 0.7, next == .toolbar ? 1 : 0.7, 1), animated)
+            hoverPad.frame = frame.insetBy(dx: -10, dy: -9)
+        }
+
+        // Colours and fades: eased, quick; contents fade in a beat after the shape starts growing.
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(animated ? 0.22 : 0)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        CATransaction.setDisableActions(!animated)
         switch next {
         case .sleep:
             // Translucent and outlined, like superwhisper's resting pill.
@@ -165,23 +193,10 @@ final class MiniRecordingView: RecordingWindowView {
             capsule.shadowOpacity = 0.35
             capsule.shadowRadius = 8
         }
-        hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
-
-        let span = CGFloat(Self.barCount - 1) * Self.barStep + Self.barWidth
-        for (index, bar) in bars.enumerated() {
-            bar.position = CGPoint(x: (size.width - span) / 2 + CGFloat(index) * Self.barStep + Self.barWidth / 2,
-                                   y: size.height / 2)
-            bar.opacity = next == .active ? 1 : 0
-        }
-        let rowWidth = 3 * Self.buttonSize + 2 * Self.buttonGap
+        fade(barRow, to: next == .active ? 1 : 0, animated: animated)
+        fade(buttonRow, to: next == .toolbar ? 1 : 0, animated: animated)
         for (index, button) in buttons.enumerated() {
-            let centre = CGPoint(x: (size.width - rowWidth) / 2 + Self.buttonSize / 2
-                                    + CGFloat(index) * (Self.buttonSize + Self.buttonGap),
-                                 y: size.height / 2)
-            button.highlight.position = centre
-            button.icon.position = centre
-            button.icon.opacity = next == .toolbar ? iconOpacity(index) : 0
-            button.highlight.opacity = next == .toolbar && hoveredButton == index ? 1 : 0
+            button.icon.opacity = iconOpacity(index)
         }
         if next != .toolbar {
             hoveredButton = nil
@@ -193,6 +208,38 @@ final class MiniRecordingView: RecordingWindowView {
         hoverPoll?.invalidate()
         hoverPoll = nil
         if next == .toolbar { startHoverPoll() }
+    }
+
+    /// Sets `value` and, if animated, springs to it from wherever the layer is on screen
+    /// right now — so an interrupted morph (hover off mid-grow) reverses smoothly.
+    private func spring(_ layer: CALayer, _ keyPath: String, _ value: Any, _ animated: Bool) {
+        let from = layer.presentation()?.value(forKeyPath: keyPath) ?? layer.value(forKeyPath: keyPath)
+        layer.setValue(value, forKeyPath: keyPath)
+        guard animated else {
+            layer.removeAnimation(forKey: keyPath)
+            return
+        }
+        let animation = CASpringAnimation(perceptualDuration: 0.42, bounce: 0.16)
+        animation.keyPath = keyPath
+        animation.fromValue = from
+        animation.toValue = value
+        layer.add(animation, forKey: keyPath)
+    }
+
+    /// Appearing contents wait a beat for the shape; disappearing ones go at once.
+    private func fade(_ layer: CALayer, to opacity: Float, animated: Bool) {
+        guard animated, opacity > 0, layer.opacity == 0 else {
+            layer.opacity = opacity
+            return
+        }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = 0
+        animation.toValue = opacity
+        animation.duration = 0.2
+        animation.beginTime = CACurrentMediaTime() + 0.08
+        animation.fillMode = .backwards
+        layer.add(animation, forKey: "fadeIn")
+        withoutAnimation { layer.opacity = opacity }
     }
 
     override func modeDidChange() {
@@ -215,7 +262,6 @@ final class MiniRecordingView: RecordingWindowView {
     }
 
     override func labelsDidChange() {
-        guard visual == .toolbar else { return }
         withoutAnimation { buttons[0].icon.opacity = iconOpacity(0) }
         if hoveredButton != nil { positionTooltip() }
     }
@@ -276,7 +322,7 @@ final class MiniRecordingView: RecordingWindowView {
 
     private func buttonIndex(at point: NSPoint) -> Int? {
         buttons.firstIndex { button in
-            capsule.convert(button.highlight.frame, to: layer).insetBy(dx: -4, dy: -4).contains(point)
+            buttonRow.convert(button.highlight.frame, to: layer).insetBy(dx: -4, dy: -4).contains(point)
         }
     }
 
@@ -297,7 +343,6 @@ final class MiniRecordingView: RecordingWindowView {
     private func updateButtonHighlights() {
         withoutAnimation {
             for (index, button) in buttons.enumerated() {
-                button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
                 button.highlight.opacity = visual == .toolbar && hoveredButton == index ? 1 : 0
             }
         }
@@ -309,7 +354,7 @@ final class MiniRecordingView: RecordingWindowView {
         let text = buttons[index].tooltip()
         let textSize = textSize(text, font: Self.tooltipFont)
         let size = CGSize(width: textSize.width + 24, height: textSize.height + 12)
-        let buttonFrame = capsule.convert(buttons[index].highlight.frame, to: layer)
+        let buttonFrame = buttonRow.convert(buttons[index].highlight.frame, to: layer)
         var x = buttonFrame.midX - size.width / 2
         x = min(max(x, 4), bounds.width - size.width - 4)
         let target = capsule.convert(capsule.bounds, to: layer)
