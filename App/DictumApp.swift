@@ -1,4 +1,7 @@
+import AVFoundation
+import Carbon.HIToolbox
 import KeyboardShortcuts
+import OSLog
 import SwiftUI
 
 @main
@@ -22,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await SpeechEngine.shared.bootstrap()
             let engine = SpeechEngine.shared
+            // Someone who has dictated before has been through setup; don't steal focus.
+            if !HistoryStore.shared.entries.isEmpty { AppSettings.shared.hasCompletedOnboarding = true }
             if !AppSettings.shared.hasCompletedOnboarding || engine.phase == .needsSetup {
                 WindowManager.shared.show(.onboarding)
             }
@@ -30,6 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let preview = UserDefaults.standard.double(forKey: "previewPill")
         if preview > 0 { DictationController.shared.simulateHold(seconds: preview) }
         if UserDefaults.standard.bool(forKey: "runSetUp") { Task { await SpeechEngine.shared.setUp() } }
+        if UserDefaults.standard.bool(forKey: "debugPermissions") {
+            let log = Logger(subsystem: "ch.martinoli.dictum", category: "debug")
+            log.info("permissions: accessibility=\(AXIsProcessTrusted()) secureInput=\(IsSecureEventInputEnabled()) microphone=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
+            NSApplication.shared.terminate(nil)
+        }
         if let path = UserDefaults.standard.string(forKey: "snapshotUI") {
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
@@ -87,7 +97,12 @@ private struct MenuContent: View {
         }
         Divider()
 
-        Button("Paste Last Transcript") { if let text = controller.lastTranscript { TextInserter.insert(text, keepInClipboard: settings.keepInClipboard) } }
+        Button("Paste Last Transcript") {
+            if let text = controller.lastTranscript {
+                let keep = settings.keepInClipboard
+                Task { await TextInserter.insert(text, keepInClipboard: keep) }
+            }
+        }
             .disabled(controller.lastTranscript == nil)
         Button("Copy Last Transcript") { if let text = controller.lastTranscript { TextInserter.copy(text) } }
             .disabled(controller.lastTranscript == nil)
@@ -131,7 +146,7 @@ private struct MenuContent: View {
             case .processing: return "Transcribing…"
             case .idle:
                 let keys = DictationController.keys(for: .pushToTalk).joined()
-                return keys.isEmpty ? "Ready" : "Ready — hold \(keys) to dictate"
+                return keys.isEmpty ? "Ready" : "Ready — tap or hold \(keys) to dictate"
             }
         }
     }

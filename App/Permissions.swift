@@ -52,6 +52,42 @@ final class Permissions {
             open("Privacy_Accessibility")
         }
         refresh()
+        watchAccessibility()
+    }
+
+    /// macOS can keep an outdated Accessibility entry for an app that has been rebuilt or
+    /// reinstalled: it looks switched on but doesn't count. Removing Dictum's entry and
+    /// asking again fixes it (only Dictum's own entry is touched).
+    func resetAccessibility() {
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "Accessibility", Bundle.main.bundleIdentifier ?? "ch.martinoli.dictum"]
+        try? reset.run()
+        reset.waitUntilExit()
+        requestAccessibility()
+    }
+
+    /// The user flips the switch in System Settings while Dictum stays in the background,
+    /// so poll briefly (once a second, for up to two minutes) until it takes effect.
+    private func watchAccessibility() {
+        watchTimer?.invalidate()
+        watchDeadline = Date().addingTimeInterval(120)
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            MainActor.assumeIsolated { Permissions.shared.pollAccessibility() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    @ObservationIgnored private var watchTimer: Timer?
+    @ObservationIgnored private var watchDeadline = Date.distantPast
+
+    private func pollAccessibility() {
+        refresh()
+        if accessibility == .granted || Date() > watchDeadline {
+            watchTimer?.invalidate()
+            watchTimer = nil
+        }
     }
 
     func open(_ pane: String) {

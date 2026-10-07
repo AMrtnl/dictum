@@ -37,7 +37,7 @@ stop:
 	@while pgrep -x $(APP) >/dev/null; do sleep 0.1; done
 
 icon:
-	@swift Scripts/make-icon.swift App/Assets.xcassets/AppIcon.appiconset
+	@swift Scripts/make-icon.swift App/Assets.xcassets/AppIcon.appiconset pill
 
 open: project
 	@open $(APP).xcodeproj

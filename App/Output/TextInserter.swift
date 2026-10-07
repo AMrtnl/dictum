@@ -5,7 +5,7 @@ import Carbon.HIToolbox
 /// Puts text into the frontmost app: clipboard + simulated ⌘V, then restores
 /// whatever was on the clipboard before.
 enum TextInserter {
-    enum Outcome { case pasted, copiedOnly }
+    enum Outcome { case pasted, copiedOnly, secureInput }
 
     /// Clipboard managers that honour nspasteboard.org markers skip our temporary write.
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
@@ -15,8 +15,11 @@ enum TextInserter {
     /// paste inside that window restores the original instead of our first transcript.
     private static var pendingRestore: (snapshot: Snapshot, changeCount: Int)?
 
+    /// Puts `text` on the clipboard and pastes it. Without Accessibility access, or while
+    /// another app has secure input on (password fields, some terminals), macOS drops
+    /// synthetic keystrokes, so the text is left on the clipboard instead.
     @discardableResult
-    static func insert(_ text: String, keepInClipboard: Bool) -> Outcome {
+    static func insert(_ text: String, keepInClipboard: Bool) async -> Outcome {
         let pasteboard = NSPasteboard.general
         var saved: Snapshot?
         if !keepInClipboard {
@@ -39,12 +42,19 @@ enum TextInserter {
             pendingRestore = nil
             return .copiedOnly
         }
+        if IsSecureEventInputEnabled() {
+            pendingRestore = nil
+            return .secureInput
+        }
+        // In tap-to-lock the user may still be holding ⌥ from the shortcut; apps that read
+        // live modifier state would see ⌥⌘V. Wait (briefly) for the keys to come up.
+        await waitForModifierRelease()
         postCommandV()
 
         if let saved {
             pendingRestore = (saved, ourChange)
-            // Give the target app time to read the clipboard before restoring it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // Give the target app time to read the clipboard (Electron apps can be slow).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 guard pasteboard.changeCount == ourChange else { return }  // copied again since
                 pendingRestore = nil
                 restore(saved, to: pasteboard)
@@ -60,6 +70,14 @@ enum TextInserter {
 
     // MARK: - Keystroke
 
+    private static func waitForModifierRelease() async {
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskShift, .maskControl]
+        for _ in 0..<40 {  // up to 0.8 s
+            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     private static func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let key = keyCode(for: "v") ?? CGKeyCode(kVK_ANSI_V)
@@ -67,7 +85,7 @@ enum TextInserter {
             let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: isDown)
             // Explicit flags: the user may still be holding ⌥ from the dictation shortcut.
             event?.flags = .maskCommand
-            event?.post(tap: .cgAnnotatedSessionEventTap)
+            event?.post(tap: .cghidEventTap)
         }
     }
 

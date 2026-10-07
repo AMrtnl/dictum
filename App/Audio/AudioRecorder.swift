@@ -2,9 +2,10 @@ import AVFoundation
 import CoreAudio
 import os
 
-/// Records the microphone as 16 kHz mono while a dictation is held.
-/// The engine exists only between `start` and `stop`, so the mic (and its
-/// orange indicator) is off the rest of the time.
+/// Records the microphone as 16 kHz mono while a dictation runs. The engine exists
+/// only between `start` and `stop`, so the mic (and its orange indicator) is off the
+/// rest of the time. Audio streams to a WAV file as it arrives, so a long hands-free
+/// dictation costs disk, not memory, and a crash still leaves the audio behind.
 final class AudioRecorder {
     struct Take {
         let url: URL
@@ -14,21 +15,29 @@ final class AudioRecorder {
     }
 
     enum RecorderError: LocalizedError {
-        case noInput
+        case noInput, file
 
-        var errorDescription: String? { "No microphone is available." }
+        var errorDescription: String? {
+            switch self {
+            case .noInput: "No microphone is available."
+            case .file: "Could not create the recording file."
+            }
+        }
     }
 
     nonisolated static let sampleRate = 16_000.0
-    nonisolated static let maxDuration: TimeInterval = 10 * 60
+    nonisolated static let maxDuration: TimeInterval = 60 * 60
 
     private var engine: AVAudioEngine?
     private var sink: CaptureSink?
 
     var isRecording: Bool { engine != nil }
 
-    /// - Parameter onLevel: called on the main thread at most 30 times a second.
-    func start(deviceUID: String?, onLevel: @escaping @MainActor (Float) -> Void) throws {
+    /// - Parameters:
+    ///   - onLevel: called on the main thread at most 30 times a second.
+    ///   - onLimit: called on the main thread if the take reaches `maxDuration`.
+    func start(deviceUID: String?, onLevel: @escaping @MainActor (Float) -> Void,
+               onLimit: @escaping @MainActor () -> Void = {}) throws {
         stopEngine()
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -38,35 +47,42 @@ final class AudioRecorder {
                                  &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
         let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0, format.sampleRate > 0,
-              let sink = CaptureSink(inputFormat: format, onLevel: onLevel)
-        else { throw RecorderError.noInput }
+        guard format.channelCount > 0, format.sampleRate > 0 else { throw RecorderError.noInput }
+        try FileManager.default.createDirectory(at: Paths.takes, withIntermediateDirectories: true)
+        let url = Paths.takes.appending(path: "\(UUID().uuidString).wav")
+        guard let sink = CaptureSink(inputFormat: format, file: url, onLevel: onLevel, onLimit: onLimit)
+        else { throw RecorderError.file }
 
         input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.tap(into: sink))
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            _ = sink.finish()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
         self.engine = engine
         self.sink = sink
     }
 
-    /// Stops recording and writes the take to a temporary 16-bit WAV file.
+    /// Stops recording and finalises the WAV file.
     func stop() -> Take? {
         guard let sink else { return nil }
         stopEngine()
-        let (samples, peak) = sink.finish()
-        guard !samples.isEmpty else { return nil }
-        let url = Paths.takes.appending(path: "\(UUID().uuidString).wav")
-        do {
-            try FileManager.default.createDirectory(at: Paths.takes, withIntermediateDirectories: true)
-            try WAV.write(samples, sampleRate: Int(Self.sampleRate), to: url)
-        } catch {
+        let (count, peak) = sink.finish()
+        guard count > 0 else {
+            try? FileManager.default.removeItem(at: sink.url)
             return nil
         }
-        return Take(url: url, duration: Double(samples.count) / Self.sampleRate, peakLevel: peak)
+        return Take(url: sink.url, duration: Double(count) / Self.sampleRate, peakLevel: peak)
     }
 
     func cancel() {
+        guard let sink else { return }
         stopEngine()
+        _ = sink.finish()
+        try? FileManager.default.removeItem(at: sink.url)
     }
 
     /// Built outside the main actor: the block runs on the realtime audio thread.
@@ -78,36 +94,49 @@ final class AudioRecorder {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        if sink != nil { sink = nil }
+        sink = nil
     }
 }
 
-/// Runs on the audio thread: converts each buffer to 16 kHz mono, accumulates it,
-/// and reports a throttled level to the main thread.
+/// Runs on the audio thread: converts each buffer to 16 kHz mono 16-bit, hands it to a
+/// background queue that appends it to the WAV file, and reports a throttled level.
 nonisolated private final class CaptureSink: @unchecked Sendable {
+    let url: URL
     private let converter: AVAudioConverter
     private let outputFormat: AVAudioFormat
     private let ratio: Double
     private let onLevel: @MainActor (Float) -> Void
+    private let onLimit: @MainActor () -> Void
+    private let handle: FileHandle
+    private let writer = DispatchQueue(label: "ch.martinoli.dictum.wav-writer", qos: .userInitiated)
     private let lock = OSAllocatedUnfairLock()
-    private var samples: [Float] = []
+    private var pending = Data()
+    private var count = 0
     private var peak: Float = 0
     private var windowLevel: Float = 0
     private var lastReport: UInt64 = 0
+    private var finished = false
 
     private static let reportInterval: UInt64 = 33_000_000  // ns, ~30 Hz
+    private static let flushBytes = 32_000  // ~1 s of audio per disk write
     private static let maxSamples = Int(AudioRecorder.sampleRate * AudioRecorder.maxDuration)
 
-    init?(inputFormat: AVAudioFormat, onLevel: @escaping @MainActor (Float) -> Void) {
+    init?(inputFormat: AVAudioFormat, file: URL, onLevel: @escaping @MainActor (Float) -> Void,
+          onLimit: @escaping @MainActor () -> Void) {
         guard let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioRecorder.sampleRate,
                                          channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: inputFormat, to: output)
+              let converter = AVAudioConverter(from: inputFormat, to: output),
+              FileManager.default.createFile(atPath: file.path, contents: WAV.header(dataBytes: 0)),
+              let handle = try? FileHandle(forWritingTo: file)
         else { return nil }
+        _ = try? handle.seekToEnd()
+        self.url = file
         self.converter = converter
         self.outputFormat = output
         self.ratio = AudioRecorder.sampleRate / inputFormat.sampleRate
         self.onLevel = onLevel
-        samples.reserveCapacity(Int(AudioRecorder.sampleRate) * 30)
+        self.onLimit = onLimit
+        self.handle = handle
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
@@ -128,29 +157,69 @@ nonisolated private final class CaptureSink: @unchecked Sendable {
         let frames = UnsafeBufferPointer(start: channel, count: Int(converted.frameLength))
 
         var sumOfSquares: Float = 0
-        for sample in frames { sumOfSquares += sample * sample }
+        var pcm = Data(count: frames.count * 2)
+        pcm.withUnsafeMutableBytes { raw in
+            let out = raw.bindMemory(to: Int16.self)
+            for (i, sample) in frames.enumerated() {
+                sumOfSquares += sample * sample
+                out[i] = Int16(max(-1, min(1, sample)) * Float(Int16.max)).littleEndian
+            }
+        }
         let rms = frames.isEmpty ? 0 : (sumOfSquares / Float(frames.count)).squareRoot()
         let level = Self.normalized(rms)
 
         let now = DispatchTime.now().uptimeNanoseconds
-        let report: Float? = lock.withLockUnchecked {
-            if samples.count < Self.maxSamples { samples.append(contentsOf: frames) }
+        let (report, flush, hitLimit): (Float?, Data?, Bool) = lock.withLockUnchecked {
+            guard !finished else { return (nil, nil, false) }
+            var hitLimit = false
+            if count < Self.maxSamples {
+                pending.append(pcm)
+                count += frames.count
+                hitLimit = count >= Self.maxSamples
+            }
+            var flush: Data?
+            if pending.count >= Self.flushBytes {
+                flush = pending
+                pending = Data()
+            }
             windowLevel = max(windowLevel, level)
-            guard now - lastReport >= Self.reportInterval else { return nil }
+            guard now - lastReport >= Self.reportInterval else { return (nil, flush, hitLimit) }
             lastReport = now
             let value = windowLevel
             peak = max(peak, value)
             windowLevel = 0
-            return value
+            return (value, flush, hitLimit)
+        }
+        if let flush {
+            let handle = self.handle
+            writer.async { try? handle.write(contentsOf: flush) }
         }
         if let report {
             let onLevel = self.onLevel
             DispatchQueue.main.async { onLevel(report) }
         }
+        if hitLimit {
+            let onLimit = self.onLimit
+            DispatchQueue.main.async { onLimit() }
+        }
     }
 
-    func finish() -> ([Float], Float) {
-        lock.withLock { (samples, max(peak, windowLevel)) }
+    /// Writes what's left, fixes the WAV header sizes, closes the file.
+    func finish() -> (samples: Int, peak: Float) {
+        let (rest, total, loudest): (Data, Int, Float) = lock.withLock {
+            let rest = pending
+            pending = Data()
+            finished = true
+            return (rest, count, max(peak, windowLevel))
+        }
+        let handle = self.handle
+        writer.sync {
+            try? handle.write(contentsOf: rest)
+            try? handle.seek(toOffset: 0)
+            try? handle.write(contentsOf: WAV.header(dataBytes: total * 2))
+            try? handle.close()
+        }
+        return (total, loudest)
     }
 
     /// Maps RMS to 0…1 on a -55…-10 dBFS scale, which reads well for speech.
@@ -161,19 +230,16 @@ nonisolated private final class CaptureSink: @unchecked Sendable {
     }
 }
 
-enum WAV {
-    static func write(_ samples: [Float], sampleRate: Int, to url: URL) throws {
-        var data = Data(capacity: 44 + samples.count * 2)
+nonisolated enum WAV {
+    /// 44-byte header for 16 kHz mono 16-bit PCM.
+    static func header(dataBytes: Int, sampleRate: Int = Int(AudioRecorder.sampleRate)) -> Data {
+        var data = Data(capacity: 44)
         func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
-        let payload = UInt32(samples.count * 2)
-        data.append(contentsOf: Array("RIFF".utf8)); append(36 + payload)
+        data.append(contentsOf: Array("RIFF".utf8)); append(UInt32(36 + dataBytes))
         data.append(contentsOf: Array("WAVE".utf8))
         data.append(contentsOf: Array("fmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
         append(UInt32(sampleRate)); append(UInt32(sampleRate * 2)); append(UInt16(2)); append(UInt16(16))
-        data.append(contentsOf: Array("data".utf8)); append(payload)
-        for sample in samples {
-            append(Int16(max(-1, min(1, sample)) * Float(Int16.max)))
-        }
-        try data.write(to: url)
+        data.append(contentsOf: Array("data".utf8)); append(UInt32(dataBytes))
+        return data
     }
 }

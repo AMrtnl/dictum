@@ -32,19 +32,25 @@ final class DictationController {
     @ObservationIgnored private var activeMode: DictationMode = .dictation
     @ObservationIgnored private var activeShortcut: KeyboardShortcuts.Name = .pushToTalk
     @ObservationIgnored private var recordingStart: ContinuousClock.Instant?
+    /// Hands-free: recording continues after the shortcut is released, until it is pressed again.
+    @ObservationIgnored private var isLocked = false
     @ObservationIgnored private var processingTask: Task<Void, Never>?
     @ObservationIgnored private var cancelListeners: [Task<Void, Never>] = []
     @ObservationIgnored private var lastText: String?
+    @ObservationIgnored private var askedForAccessibility = false
     @ObservationIgnored private let log = Logger(subsystem: "ch.martinoli.dictum", category: "dictation")
 
-    /// Releases shorter than this are accidental taps and get discarded silently.
+    /// "Hold to talk": releases shorter than this are accidental taps and get discarded.
     private static let minimumHold: Duration = .milliseconds(250)
+    /// "Tap to lock": releases shorter than this lock the dictation hands-free.
+    private static let tapThreshold: Duration = .milliseconds(350)
     /// Takes whose loudest moment stays under this are treated as silence.
     private static let speechLevel: Float = 0.12
 
     private struct PanelConfig: Equatable {
         var style: RecordingWindowStyle
         var stopKeys: [String]
+        var waveform: WaveformStyle
     }
 
     private init() {}
@@ -64,6 +70,16 @@ final class DictationController {
     // MARK: - Hotkey
 
     private func pressed(_ shortcut: KeyboardShortcuts.Name) {
+        // A press while hands-free (or in toggle mode) ends the dictation. Using the other
+        // dictation shortcut to stop switches mode: talk freely, then decide to rewrite.
+        if state == .recording {
+            guard isLocked else { return }
+            if shortcut != activeShortcut {
+                activeMode = shortcut == .pushToTalkRewrite ? .rewrite : settings.mode
+            }
+            stopRecording()
+            return
+        }
         guard state == .idle else { return }
         guard canDictate() else { return }
 
@@ -74,6 +90,8 @@ final class DictationController {
             // Through `self.panel`, so levels follow a Classic ↔ Mini switch mid-recording.
             try recorder.start(deviceUID: settings.microphoneUID) { [weak self] level in
                 self?.panel?.content.push(level: level)
+            } onLimit: { [weak self] in
+                self?.stopRecording()
             }
         } catch {
             showToast(error.localizedDescription)
@@ -83,6 +101,7 @@ final class DictationController {
         log.info("recording (\(self.activeMode.rawValue, privacy: .public))")
         state = .recording
         recordingStart = .now
+        setLocked(settings.shortcutBehavior == .toggle)
         listenForCancel()
         Sounds.playStart()
         hideToast()
@@ -93,17 +112,30 @@ final class DictationController {
     }
 
     private func released(_ shortcut: KeyboardShortcuts.Name) {
-        guard state == .recording, shortcut == activeShortcut, let start = recordingStart else { return }
-        recordingStart = nil
+        guard state == .recording, shortcut == activeShortcut, !isLocked, let start = recordingStart else { return }
         let held = ContinuousClock.now - start
-        let take = recorder.stop()
-
-        guard held >= Self.minimumHold else {
-            discard(take)
+        switch settings.shortcutBehavior {
+        case .hybrid where held < Self.tapThreshold:
+            setLocked(true)  // a tap: keep recording hands-free
+            if lockHintsShown < 3 {
+                lockHintsShown += 1
+                let keys = Self.keys(for: activeShortcut).joined()
+                showToast("Hands-free — press \(keys) again to stop", symbol: "lock.fill")
+            }
+        case .hold where held < Self.minimumHold:
+            recorder.cancel()  // an accidental tap
             finish()
-            return
+        default:
+            stopRecording()
         }
-        guard let take else {
+    }
+
+    /// Ends the recording and starts transcription (or explains why there's nothing to do).
+    private func stopRecording() {
+        guard state == .recording else { return }
+        recordingStart = nil
+        setLocked(false)
+        guard let take = recorder.stop() else {
             Sounds.playEmpty()
             finish()
             showToast("Nothing was recorded — check the microphone", symbol: "mic.slash.fill")
@@ -122,7 +154,21 @@ final class DictationController {
         panel?.content.processingLabel = "Transcribing…"
         panel?.content.mode = .processing
         let mode = activeMode
-        processingTask = Task { await process(take, mode: mode) }
+        let deliverText = !debugNoPaste
+        processingTask = Task { await process(take, mode: mode, deliverText: deliverText) }
+    }
+
+    /// Set by the debug harness: run the real recorder and pipeline but never paste.
+    @ObservationIgnored var debugNoPaste = false
+
+    private func setLocked(_ locked: Bool) {
+        isLocked = locked
+        panel?.content.isLocked = locked
+    }
+
+    private var lockHintsShown: Int {
+        get { UserDefaults.standard.integer(forKey: "lockHintsShown") }
+        set { UserDefaults.standard.set(newValue, forKey: "lockHintsShown") }
     }
 
     /// Whether a dictation can start right now; explains why not otherwise.
@@ -169,7 +215,7 @@ final class DictationController {
     ///   paste into (or touch the clipboard of) whatever app is in front.
     private func process(_ take: AudioRecorder.Take, mode: DictationMode, deliverText: Bool = true) async {
         do {
-            var text = try await engine.transcribe(take.url, language: settings.language)
+            var (text, language) = try await transcribe(take.url)
             guard !Task.isCancelled else { return discard(take) }
             var original: String?
             if text.isEmpty {
@@ -196,7 +242,14 @@ final class DictationController {
 
             text = VocabularyStore.shared.apply(to: text)
             original = original.map(VocabularyStore.shared.apply)
-            let app = NSWorkspace.shared.frontmostApplication?.localizedName
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            let app = frontmost?.localizedName
+            if settings.saveTrainingData {
+                // The verbatim transcript is the training label; a rewrite is kept alongside.
+                TrainingDataStore.shared.add(take: take.url, transcription: original ?? text,
+                                             rewrite: original == nil ? nil : text,
+                                             language: language.rawValue, duration: take.duration)
+            }
             discard(take)
             finish()
             if deliverText { deliver(text) }
@@ -204,7 +257,8 @@ final class DictationController {
             if settings.saveHistory {
                 HistoryStore.shared.add(HistoryEntry(
                     text: text, original: original, duration: take.duration,
-                    mode: mode.rawValue, language: settings.language.rawValue, app: app))
+                    mode: mode.rawValue, language: language.rawValue, app: app,
+                    appBundleID: frontmost?.bundleIdentifier))
             }
             if let note { showToast(note, symbol: "info.circle.fill") }
         } catch {
@@ -215,9 +269,40 @@ final class DictationController {
         }
     }
 
+    /// Transcribes with automatic language detection when it's on: first pass with the
+    /// last language used, then — if the text turns out to be another of the user's
+    /// languages — a second pass with that language's hint (~0.25 s).
+    private func transcribe(_ url: URL) async throws -> (String, SpeechLanguage) {
+        guard settings.autoLanguage, settings.spokenLanguages.count > 1 else {
+            let language = settings.autoLanguage ? (settings.spokenLanguages.first ?? settings.language) : settings.language
+            return (try await engine.transcribe(url, language: language), language)
+        }
+        let spoken = settings.spokenLanguages
+        let hint = settings.lastLanguage.flatMap { spoken.contains($0) ? $0 : nil } ?? spoken[0]
+        let first = try await engine.transcribe(url, language: hint)
+        guard let detected = LanguageDetector.detect(first, among: spoken), detected != hint else {
+            return (first, hint)
+        }
+        log.info("language: \(hint.rawValue, privacy: .public) → \(detected.rawValue, privacy: .public)")
+        settings.lastLanguage = detected
+        return (try await engine.transcribe(url, language: detected), detected)
+    }
+
     private func deliver(_ text: String) {
-        if TextInserter.insert(text, keepInClipboard: settings.keepInClipboard) == .copiedOnly {
-            showToast("Copied — allow Accessibility in Settings to paste automatically", symbol: "doc.on.clipboard.fill")
+        Task {
+            switch await TextInserter.insert(text, keepInClipboard: settings.keepInClipboard) {
+            case .pasted:
+                break
+            case .copiedOnly:
+                showToast("Copied — Dictum needs Accessibility access to paste automatically", symbol: "doc.on.clipboard.fill")
+                // Once per launch, bring up macOS's own prompt / the Accessibility pane.
+                if !askedForAccessibility {
+                    askedForAccessibility = true
+                    Permissions.shared.requestAccessibility()
+                }
+            case .secureInput:
+                showToast("Secure input is on in this app — press ⌘V to paste", symbol: "lock.fill")
+            }
         }
     }
 
@@ -236,7 +321,7 @@ final class DictationController {
     func retry(_ entry: HistoryEntry) async {
         guard let path = entry.audioPath else { return }
         do {
-            var text = try await engine.transcribe(URL(fileURLWithPath: path), language: settings.language)
+            var (text, _) = try await transcribe(URL(fileURLWithPath: path))
             var original: String?
             if entry.mode == DictationMode.rewrite.rawValue, engine.rewriteModel == .installed,
                let cleaned = try? await engine.rewrite(text), cleaned != text {
@@ -269,6 +354,7 @@ final class DictationController {
         guard state != .idle else { return }
         log.info("cancelled")
         recordingStart = nil
+        setLocked(false)
         recorder.cancel()
         processingTask?.cancel()
         finish()
@@ -276,6 +362,7 @@ final class DictationController {
 
     private func finish() {
         state = .idle
+        if isLocked { setLocked(false) }
         processingTask = nil
         cancelListeners.forEach { $0.cancel() }
         cancelListeners = []
@@ -310,7 +397,8 @@ final class DictationController {
     // MARK: - Recording window
 
     private func currentPanel(for shortcut: KeyboardShortcuts.Name = .pushToTalk) -> RecordingPanel? {
-        let config = PanelConfig(style: settings.recordingWindowStyle, stopKeys: Self.keys(for: shortcut))
+        let config = PanelConfig(style: settings.recordingWindowStyle, stopKeys: Self.keys(for: shortcut),
+                                 waveform: settings.waveformStyle)
         if config != panelConfig {
             if let old = panel {  // cross-fade: keep the old window alive while it fades out
                 retiringPanels.append(old)
@@ -321,8 +409,8 @@ final class DictationController {
             }
             panelConfig = config
             let view: RecordingWindowView? = switch config.style {
-            case .mini: MiniRecordingView()
-            case .classic: ClassicRecordingView(stopKeys: config.stopKeys)
+            case .mini: MiniRecordingView(style: config.waveform)
+            case .classic: ClassicRecordingView(stopKeys: config.stopKeys, style: config.waveform)
             case .none: nil
             }
             view?.onToggleSize = { [weak self] in self?.toggleWindowSize() }
@@ -368,7 +456,7 @@ final class DictationController {
 
     private func observeIndicatorSettings() {
         withObservationTracking {
-            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator, settings.mode)
+            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator, settings.mode, settings.waveformStyle)
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -427,6 +515,7 @@ final class DictationController {
     /// One press/hold/release cycle without the keyboard, for checking the window:
     /// `open Dictum.app --args -previewPill 4`
     func simulateHold(seconds: Double) {
+        debugNoPaste = true
         Task {
             pressed(.pushToTalk)
             try? await Task.sleep(for: .seconds(seconds))

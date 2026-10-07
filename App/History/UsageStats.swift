@@ -55,6 +55,41 @@ struct UsageStats {
         minutesSaved = max(0, Double(words) / Self.typingWPM - spokenSeconds / 60)
     }
 
+    /// Words per day for the last `days` days, oldest first (empty days included).
+    static func daily(_ entries: [HistoryEntry], days: Int = 14) -> [(day: Date, words: Int)] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        var totals: [Date: Int] = [:]
+        for entry in entries where entry.status == .done {
+            totals[calendar.startOfDay(for: entry.date), default: 0] += entry.text.split(whereSeparator: \.isWhitespace).count
+        }
+        return (0..<days).reversed().compactMap { offset in
+            calendar.date(byAdding: .day, value: -offset, to: today).map { ($0, totals[$0] ?? 0) }
+        }
+    }
+
+    /// Share of dictations per language, largest first.
+    static func languages(_ entries: [HistoryEntry]) -> [(code: String, share: Double)] {
+        let done = entries.filter { $0.status == .done }
+        guard !done.isEmpty else { return [] }
+        let counts = Dictionary(grouping: done, by: \.language).mapValues(\.count)
+        return counts.map { ($0.key, Double($0.value) / Double(done.count)) }.sorted { $0.share > $1.share }
+    }
+
+    /// Apps dictated into most, with their bundle IDs for icons.
+    static func topApps(_ entries: [HistoryEntry], limit: Int = 4) -> [(name: String, bundleID: String?, count: Int)] {
+        var counts: [String: (bundleID: String?, count: Int)] = [:]
+        for entry in entries where entry.status == .done {
+            guard let app = entry.app else { continue }
+            let current = counts[app] ?? (entry.appBundleID, 0)
+            counts[app] = (current.bundleID ?? entry.appBundleID, current.count + 1)
+        }
+        let ranked: [(name: String, bundleID: String?, count: Int)] = counts.map { name, value in
+            (name: name, bundleID: value.bundleID, count: value.count)
+        }
+        return Array(ranked.sorted { $0.count > $1.count }.prefix(limit))
+    }
+
     var savedDescription: String {
         let minutes = Int(minutesSaved.rounded())
         if minutes < 1 { return "–" }

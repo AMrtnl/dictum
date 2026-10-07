@@ -7,8 +7,6 @@ import QuartzCore
 final class ClassicRecordingView: RecordingWindowView {
     private static let defaultCardSize = CGSize(width: 434, height: 136)
     private static let margin = NSEdgeInsets(top: 22, left: 20, bottom: 14, right: 20)
-    private static let barWidth: CGFloat = 1.5
-    private static let barStep: CGFloat = 3.75
     private static let waveformInset: CGFloat = 20
     private static let footerInset: CGFloat = 12
     private static let footerHeight: CGFloat = 38
@@ -18,19 +16,19 @@ final class ClassicRecordingView: RecordingWindowView {
 
     private let card: CALayer
     private let footer = CALayer()
-    private var bars: [CALayer] = []
+    private let waveform: Waveform
     private let micIcon = CALayer()
     private let spinner = makeSpinner(diameter: 13, color: dim)
     private let modeLabel: CATextLayer
     private let hints = CALayer()
     private let stopHint = CALayer()
     private let collapseIcon = CALayer()
-    private var maxBarHeight: CGFloat = 18
     /// Narrowest card that still fits the footer without overlap.
     private let minimumCardWidth: CGFloat
 
     /// - Parameter stopKeys: key caps for the dictation shortcut, e.g. ["⌥", "Space"].
-    init(stopKeys: [String]) {
+    init(stopKeys: [String], style: WaveformStyle = .conveyor) {
+        waveform = style.make(style.metrics(for: .classic))
         let midY = Self.footerHeight / 2
         modeLabel = makeTextLayer("Dictation", font: Self.footerFont, color: Self.dim, x: 38, midY: midY)
         card = makeSurface(
@@ -71,6 +69,7 @@ final class ClassicRecordingView: RecordingWindowView {
             historyLength: 1
         )
         layer?.addSublayer(card)
+        card.addSublayer(waveform.layer)
 
         footer.cornerRadius = 11
         footer.backgroundColor = NSColor.white.withAlphaComponent(0.055).cgColor
@@ -121,32 +120,12 @@ final class ClassicRecordingView: RecordingWindowView {
         hints.frame.origin.x = footer.bounds.width - 9 - hints.frame.width
         collapseIcon.frame = collapseFrame(in: size).insetBy(dx: 3, dy: 3)
 
-        // Waveform: centred in the space above the footer, as many bars as fit.
+        // Waveform: centred in the space above the footer, growing with the card.
         let top = Self.footerInset + Self.footerHeight
         let midY = top + (size.height - top) * 0.45
-        maxBarHeight = max(12, (size.height - top) * 0.21)
-        let width = size.width - 2 * Self.waveformInset
-        var count = max(31, Int((width - Self.barWidth) / Self.barStep) + 1)
-        if count.isMultiple(of: 2) { count -= 1 }
-        resizeBars(to: count)
-        setHistoryLength(count / 2 + 1)
-        let step = (width - Self.barWidth) / CGFloat(count - 1)
-        for (index, bar) in bars.enumerated() {
-            bar.position = CGPoint(x: Self.waveformInset + CGFloat(index) * step + Self.barWidth / 2, y: midY)
-        }
-        levelsDidChange()
-    }
-
-    private func resizeBars(to count: Int) {
-        while bars.count > count { bars.removeLast().removeFromSuperlayer() }
-        while bars.count < count {
-            let bar = CALayer()
-            bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: Self.barWidth)
-            bar.cornerRadius = Self.barWidth / 2
-            bar.backgroundColor = NSColor.white.withAlphaComponent(0.55).cgColor
-            card.addSublayer(bar)
-            bars.append(bar)
-        }
+        let height = max(24, (size.height - top) * 0.42)
+        waveform.layout(in: CGRect(x: Self.waveformInset, y: midY - height / 2,
+                                   width: size.width - 2 * Self.waveformInset, height: height))
     }
 
     private func collapseFrame(in size: CGSize) -> CGRect {
@@ -172,15 +151,13 @@ final class ClassicRecordingView: RecordingWindowView {
 
     // MARK: State
 
-    override func levelsDidChange() {
-        guard mode != .processing else { return }
-        let half = bars.count / 2
-        for (index, bar) in bars.enumerated() {
-            let distance = abs(index - half)
-            let edge = CGFloat(distance) / CGFloat(max(half, 1))
-            let level = distance < levels.count ? CGFloat(levels[distance]) : 0
-            bar.bounds.size.height = max(Self.barWidth, level * maxBarHeight * (1 - edge * edge))
-        }
+    override func levelPushed(_ level: Float) {
+        guard mode == .recording else { return }
+        waveform.push(level, animated: window?.isVisible == true)
+    }
+
+    override func resetLevelsDidHappen() {
+        waveform.reset()
     }
 
     override func modeDidChange() {
@@ -190,10 +167,8 @@ final class ClassicRecordingView: RecordingWindowView {
         micIcon.opacity = processing ? 0 : 1
         spinner.opacity = processing ? 1 : 0
         stopHint.opacity = mode == .recording ? 1 : 0
-        if processing {
-            for bar in bars { bar.bounds.size.height = Self.barWidth }
-        }
         CATransaction.commit()
+        if mode != .recording { waveform.reset() }
 
         updateModeLabel()
         if processing { startSpinning(spinner) } else { stopAnimations() }
@@ -203,10 +178,16 @@ final class ClassicRecordingView: RecordingWindowView {
         updateModeLabel()
     }
 
+    override func lockDidChange() {
+        updateModeLabel()
+        let colour = isLocked ? NSColor(red: 1, green: 0.32, blue: 0.28, alpha: 1) : Self.dim
+        withoutAnimation { micIcon.contents = Self.symbolImage(isLocked ? "record.circle.fill" : "mic.fill", color: colour) }
+    }
+
     private func updateModeLabel() {
         let text = switch mode {
         case .idle: "Ready"
-        case .recording: modeTitle
+        case .recording: isLocked ? "\(modeTitle) · hands-free" : modeTitle
         case .processing: processingLabel
         }
         withoutAnimation {

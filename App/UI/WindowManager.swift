@@ -23,9 +23,15 @@ final class WindowManager: NSObject, NSWindowDelegate {
         }
         let window = windows[id] ?? make(id)
         windows[id] = window
+        // Remember who had focus, to hand it back exactly when Dictum's windows close.
+        if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current {
+            previousApp = front
+        }
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
+
+    private var previousApp: NSRunningApplication?
 
     func close(_ kind: Kind) {
         windows[kind == .onboarding ? .onboarding : .main]?.close()
@@ -36,10 +42,19 @@ final class WindowManager: NSObject, NSWindowDelegate {
               let id = windows.first(where: { $0.value === window })?.key else { return }
         windows[id] = nil
         if id == .onboarding { AppSettings.shared.hasCompletedOnboarding = true }
-        // A menu-bar app stays active after its last window closes, leaving no app to
-        // paste into; hiding hands focus back to the app the user was working in.
+        // A menu-bar app stays active after its last window closes, leaving no app to paste
+        // into. Hand focus back to the app the user came from — not whichever app macOS
+        // would pick if we just hid (that's how Logic Pro kept jumping forward).
         if windows.isEmpty {
-            DispatchQueue.main.async { NSApp.hide(nil) }
+            let previous = previousApp
+            previousApp = nil
+            DispatchQueue.main.async {
+                if let previous, !previous.isTerminated {
+                    previous.activate()
+                } else {
+                    NSApp.hide(nil)
+                }
+            }
         }
     }
 
@@ -81,10 +96,11 @@ extension WindowManager {
             ("home", AnyView(HomeView().frame(width: 700, height: 640))),
             ("modes", AnyView(ModesPage().frame(width: 700, height: 360))),
             ("vocabulary", AnyView(VocabularyView().frame(width: 700, height: 420))),
-            ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 980))),
+            ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 1400))),
             ("sound", AnyView(SoundPage().frame(width: 700, height: 300))),
             ("models", AnyView(ModelSettings().frame(width: 700, height: 640))),
             ("history", AnyView(HistoryPage().frame(width: 700, height: 420))),
+            ("training", AnyView(TrainingDataView().frame(width: 700, height: 620))),
         ]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {

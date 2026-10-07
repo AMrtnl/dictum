@@ -17,6 +17,7 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var audioPath: String?
     /// The app the text was pasted into.
     var app: String?
+    var appBundleID: String?
 }
 
 /// Recent dictations, stored as JSON in Application Support.

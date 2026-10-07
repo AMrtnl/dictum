@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Pages of the main window, in sidebar order.
 enum MainPage: String, Hashable, CaseIterable, Identifiable {
-    case home, modes, vocabulary, configuration, sound, models, history, about
+    case home, modes, vocabulary, configuration, sound, models, history, training, about
 
     var id: Self { self }
 
@@ -16,6 +16,7 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
         case .sound: "Sound"
         case .models: "Models library"
         case .history: "History"
+        case .training: "Training data"
         case .about: "About"
         }
     }
@@ -29,6 +30,7 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
         case .sound: "speaker.wave.2.fill"
         case .models: "books.vertical.fill"
         case .history: "clock.arrow.circlepath"
+        case .training: "waveform.badge.plus"
         case .about: "info.circle.fill"
         }
     }
@@ -38,12 +40,13 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
         case .home: .orange
         case .modes, .vocabulary: .blue
         case .history: .purple
+        case .training: .green
         default: Color(white: 0.5)
         }
     }
 
     /// Sidebar groups, separated by space like superwhisper's.
-    static let groups: [[MainPage]] = [[.home], [.modes, .vocabulary], [.configuration, .sound, .models], [.history]]
+    static let groups: [[MainPage]] = [[.home], [.modes, .vocabulary], [.configuration, .sound, .models], [.history, .training]]
 }
 
 /// Which page the main window shows; set before opening it to deep-link.
@@ -81,6 +84,7 @@ struct MainWindowView: View {
         case .sound: SoundPage()
         case .models: ModelSettings()
         case .history: HistoryPage()
+        case .training: TrainingDataView()
         case .about: AboutSettings()
         }
     }

@@ -33,6 +33,11 @@ class RecordingWindowView: NSView {
         didSet { if mode != oldValue { modeDidChange() } }
     }
 
+    /// Hands-free recording: the shortcut was tapped, not held.
+    var isLocked = false {
+        didSet { if isLocked != oldValue { lockDidChange() } }
+    }
+
     /// Whether Rewrite is the current default mode (Mini's ✦ button shows it).
     var rewriteOn = false {
         didSet { if rewriteOn != oldValue { labelsDidChange() } }
@@ -84,14 +89,17 @@ class RecordingWindowView: NSView {
     var onPreferredSizeChange: (() -> Void)?
 
     func push(level: Float) {
+        let level = min(max(level, 0), 1)
         levels.removeLast()
-        levels.insert(min(max(level, 0), 1), at: 0)
+        levels.insert(level, at: 0)
         withoutAnimation { levelsDidChange() }
+        levelPushed(level)
     }
 
     func resetLevels() {
         levels = [Float](repeating: 0, count: levels.count)
         withoutAnimation { levelsDidChange() }
+        resetLevelsDidHappen()
     }
 
     /// For styles whose bar count follows their width; keeps the newest samples.
@@ -194,11 +202,15 @@ class RecordingWindowView: NSView {
     // MARK: Subclass hooks
 
     func levelsDidChange() {}
+    /// The newest level, for styles that draw with a `Waveform`.
+    func levelPushed(_ level: Float) {}
+    func resetLevelsDidHappen() {}
     func layoutSurface() {}
     /// Pointer position over the view (nil when it leaves), for hover effects.
     func hoverChanged(at point: NSPoint?) {}
     func modeDidChange() {}
     func labelsDidChange() {}
+    func lockDidChange() {}
     func stopAnimations() {}
 
     override func viewDidChangeBackingProperties() {

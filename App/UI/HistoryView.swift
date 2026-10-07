@@ -1,6 +1,24 @@
 import SwiftUI
 
 struct HistoryView: View {
+    /// Entries grouped by day: Today, Yesterday, then dates.
+    static func days(_ entries: [HistoryEntry]) -> [(title: String, entries: [HistoryEntry])] {
+        let calendar = Calendar.current
+        var order: [Date] = []
+        var groups: [Date: [HistoryEntry]] = [:]
+        for entry in entries {
+            let day = calendar.startOfDay(for: entry.date)
+            if groups[day] == nil { order.append(day) }
+            groups[day, default: []].append(entry)
+        }
+        return order.map { day in
+            let title = calendar.isDateInToday(day) ? "Today"
+                : calendar.isDateInYesterday(day) ? "Yesterday"
+                : day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+            return (title, groups[day] ?? [])
+        }
+    }
+
     private let history = HistoryStore.shared
     @State private var query = ""
 
@@ -17,14 +35,20 @@ struct HistoryView: View {
                 ContentUnavailableView {
                     Label("No dictations yet", systemImage: "waveform")
                 } description: {
-                    Text("Hold \(DictationController.keys(for: .pushToTalk).joined()) anywhere and speak. Your dictations show up here.")
+                    Text("Tap \(DictationController.keys(for: .pushToTalk).joined()) anywhere and speak. Your dictations show up here.")
                 }
             } else if entries.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
-                List(entries) { entry in
-                    HistoryRow(entry: entry)
-                        .listRowSeparator(.visible)
+                List {
+                    ForEach(Self.days(entries), id: \.title) { day in
+                        Section(day.title) {
+                            ForEach(day.entries) { entry in
+                                HistoryRow(entry: entry)
+                                    .listRowSeparator(.visible)
+                            }
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -42,6 +66,16 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            Group {
+                if let icon = AppIcons.icon(for: entry.appBundleID) {
+                    Image(nsImage: icon).resizable()
+                } else {
+                    Image(systemName: entry.status == .failed ? "exclamationmark.triangle" : "waveform")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 20, height: 20)
+            .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
                 if entry.status == .failed {
                     Label("Transcription failed", systemImage: "exclamationmark.triangle.fill")
@@ -74,11 +108,12 @@ private struct HistoryRow: View {
     }
 
     private var meta: String {
-        let time = entry.date.formatted(date: .abbreviated, time: .shortened)
+        let time = entry.date.formatted(date: .omitted, time: .shortened)
         let seconds = Int(entry.duration.rounded())
         let duration = String(format: "%d:%02d", seconds / 60, seconds % 60)
         let mode = DictationMode(rawValue: entry.mode)?.title ?? entry.mode
-        var parts = [time, duration, mode]
+        var parts = [time, duration, mode, entry.language.uppercased()]
+        if let app = entry.app { parts.insert(app, at: 1) }
         if entry.original != nil { parts.append(showingOriginal ? "original" : "rewritten") }
         return parts.joined(separator: " · ")
     }

@@ -17,7 +17,7 @@ struct OnboardingView: View {
 
             VStack(spacing: 0) {
                 ChecklistRow(number: 1, title: "Microphone",
-                             detail: "So Dictum can hear you while you hold the shortcut.",
+                             detail: "So Dictum can hear you while you dictate.",
                              done: permissions.microphone == .granted) {
                     if permissions.microphone == .granted {
                         GrantedLabel()
@@ -79,9 +79,9 @@ struct OnboardingView: View {
             AppGlyph(size: 68)
             Text("Welcome to Dictum").font(.system(size: 24, weight: .semibold))
             HStack(spacing: 5) {
-                Text("Hold")
+                Text("Tap")
                 KeycapsView(keys: keys)
-                Text("anywhere, speak, and let go. Your words are typed for you.")
+                Text("anywhere, speak, tap again. Your words are typed for you.")
             }
             .font(.system(size: 13))
             .foregroundStyle(.secondary)
@@ -114,9 +114,9 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
                 Text("Try it:").fontWeight(.semibold)
-                Text("click below, hold")
+                Text("click below, tap")
                 KeycapsView(keys: keys)
-                Text("and say something.")
+                Text("say something, tap again.")
             }
             .font(.system(size: 13))
             .foregroundStyle(isComplete ? .primary : .secondary)

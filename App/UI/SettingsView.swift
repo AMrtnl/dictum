@@ -12,16 +12,24 @@ struct ConfigurationPage: View {
                 KeyboardShortcuts.Recorder("Dictate", name: .pushToTalk)
                 KeyboardShortcuts.Recorder("Dictate with Rewrite", name: .pushToTalkRewrite)
                 KeyboardShortcuts.Recorder("Paste last transcript", name: .pasteLast)
+                Picker("When I press the shortcut", selection: $settings.shortcutBehavior) {
+                    ForEach(ShortcutBehavior.allCases) { Text($0.title).tag($0) }
+                }
+                Text(settings.shortcutBehavior.summary).font(.callout).foregroundStyle(.secondary)
             } header: {
                 Text("Shortcuts")
             } footer: {
-                Text("Hold a dictation shortcut while you speak and let go to paste. Esc cancels.")
+                Text("Esc cancels a dictation. Pressing the other dictation shortcut to stop a hands-free dictation switches its mode.")
             }
 
             Section("Recording window") {
                 RecordingStylePicker(selection: $settings.recordingWindowStyle)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
+                Picker("Waveform", selection: $settings.waveformStyle) {
+                    ForEach(WaveformStyle.allCases) { Text($0.title).tag($0) }
+                }
+                Text(settings.waveformStyle.summary).font(.callout).foregroundStyle(.secondary)
                 Toggle("Always show", isOn: $settings.alwaysShowIndicator)
                     .disabled(settings.recordingWindowStyle == .none)
                 Text("Keeps the small window on screen between dictations, asleep as a thin pill; hover it for Rewrite, Home and Expand. It does no work while idle.")
@@ -34,11 +42,19 @@ struct ConfigurationPage: View {
             }
 
             Section("Language") {
-                Picker("Language", selection: $settings.language) {
-                    ForEach(SpeechLanguage.allCases) { Text($0.title).tag($0) }
+                Toggle("Detect the language automatically", isOn: $settings.autoLanguage)
+                if settings.autoLanguage {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Languages you speak").font(.callout)
+                        LanguageChips(selection: $settings.spokenLanguages)
+                    }
+                    Text("Dictum works out which of these each dictation is in, so you can switch between them freely. Fewer languages means fewer mix-ups.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Picker("Language", selection: $settings.language) {
+                        ForEach(SpeechLanguage.allCases) { Text($0.title).tag($0) }
+                    }
                 }
-                Text("A hint for the speech model. Mixed French and English dictation still comes out in the language you speak.")
-                    .font(.callout).foregroundStyle(.secondary)
             }
 
             Section("Pasting") {
@@ -61,6 +77,69 @@ struct ConfigurationPage: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Toggle chips for the languages the user speaks (at least one stays selected).
+struct LanguageChips: View {
+    @Binding var selection: [SpeechLanguage]
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(SpeechLanguage.allCases) { language in
+                let on = selection.contains(language)
+                Button {
+                    if on { if selection.count > 1 { selection.removeAll { $0 == language } } }
+                    else { selection.append(language) }
+                } label: {
+                    Text(language.title)
+                        .font(.system(size: 12, weight: on ? .semibold : .regular))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(on ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08)))
+                        .overlay(Capsule().strokeBorder(on ? Color.accentColor : Color.secondary.opacity(0.2)))
+                        .foregroundStyle(on ? Color.accentColor : .primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// Wraps its children onto as many rows as needed.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            widest = max(widest, x - spacing)
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: widest, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -319,21 +398,16 @@ struct AboutSettings: View {
     }
 }
 
-/// The app's mark: white waveform bars in a dark rounded square.
+/// The app's icon, for in-app branding (it carries its own margins and shadow, so it's
+/// drawn slightly larger than `size` to make the tile itself about `size` wide).
 struct AppGlyph: View {
     var size: CGFloat = 64
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
-            .fill(LinearGradient(colors: [Color(white: 0.16), Color(white: 0.04)], startPoint: .top, endPoint: .bottom))
+        Image(nsImage: NSApplication.shared.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size * 1.24, height: size * 1.24)
             .frame(width: size, height: size)
-            .overlay {
-                HStack(spacing: size * 0.05) {
-                    ForEach([0.3, 0.55, 0.85, 1.0, 0.7, 0.45, 0.25], id: \.self) { height in
-                        Capsule().fill(.white).frame(width: size * 0.055, height: size * 0.5 * height)
-                    }
-                }
-            }
-            .shadow(color: .black.opacity(0.2), radius: size * 0.06, y: size * 0.03)
     }
 }

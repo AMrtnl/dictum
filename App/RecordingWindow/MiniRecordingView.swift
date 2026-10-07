@@ -22,10 +22,7 @@ final class MiniRecordingView: RecordingWindowView {
     private static let activeSize = CGSize(width: 86, height: 30)
     private static let buttonSize: CGFloat = 34
     private static let buttonGap: CGFloat = 12
-    private static let barCount = 11
-    private static let barWidth: CGFloat = 2.5
-    private static let barStep: CGFloat = 5
-    private static let maxBarHeight: CGFloat = 16
+    private static let waveformSize = CGSize(width: 64, height: 18)
     private static let tooltipFont = NSFont.systemFont(ofSize: 13, weight: .medium)
 
     private let capsule = CALayer()
@@ -34,7 +31,10 @@ final class MiniRecordingView: RecordingWindowView {
     /// middle as the capsule morphs, instead of sliding with its corner.
     private let barRow = CALayer()
     private let buttonRow = CALayer()
-    private let bars = (0..<barCount).map { _ in CALayer() }
+    private let waveform: Waveform
+    private let dots = (0..<3).map { _ in CALayer() }
+    /// Red "live" dot shown while recording hands-free.
+    private let lockDot = CALayer()
     private var buttons: [Button] = []
     private let tooltip = CALayer()
     private let tooltipLabel = CATextLayer()
@@ -49,8 +49,9 @@ final class MiniRecordingView: RecordingWindowView {
     private static let windowSize = NSSize(width: toolbarSize.width + 2 * margin,
                                            height: toolbarSize.height + 2 * margin + tooltipZone)
 
-    init() {
-        super.init(size: Self.windowSize, historyLength: Self.barCount / 2 + 1)
+    init(style: WaveformStyle = .conveyor) {
+        waveform = style.make(style.metrics(for: .mini))
+        super.init(size: Self.windowSize, historyLength: 1)
         // A nearly invisible pad widens the hover target around the thin sleeping pill.
         hoverPad.backgroundColor = NSColor.white.withAlphaComponent(0.004).cgColor
         layer?.addSublayer(hoverPad)
@@ -64,13 +65,22 @@ final class MiniRecordingView: RecordingWindowView {
             row.bounds = .zero
             capsule.addSublayer(row)
         }
-        let span = CGFloat(Self.barCount - 1) * Self.barStep + Self.barWidth
-        for (index, bar) in bars.enumerated() {
-            bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: Self.barWidth)
-            bar.position = CGPoint(x: -span / 2 + CGFloat(index) * Self.barStep + Self.barWidth / 2, y: 0)
-            bar.cornerRadius = Self.barWidth / 2
-            bar.backgroundColor = NSColor.white.withAlphaComponent(0.95).cgColor
-            barRow.addSublayer(bar)
+        barRow.addSublayer(waveform.layer)
+        waveform.layout(in: CGRect(x: -Self.waveformSize.width / 2, y: -Self.waveformSize.height / 2,
+                                   width: Self.waveformSize.width, height: Self.waveformSize.height))
+        lockDot.bounds = CGRect(x: 0, y: 0, width: 6, height: 6)
+        lockDot.cornerRadius = 3
+        lockDot.backgroundColor = NSColor(red: 1, green: 0.27, blue: 0.23, alpha: 1).cgColor
+        lockDot.opacity = 0
+        barRow.addSublayer(lockDot)
+        // Processing: three dots pulsing in turn, in place of the waveform.
+        for (index, dot) in dots.enumerated() {
+            dot.bounds = CGRect(x: 0, y: 0, width: 5, height: 5)
+            dot.cornerRadius = 2.5
+            dot.backgroundColor = NSColor.white.cgColor
+            dot.position = CGPoint(x: CGFloat(index - 1) * 10, y: 0)
+            dot.opacity = 0
+            barRow.addSublayer(dot)
         }
 
         buttons = [
@@ -118,11 +128,13 @@ final class MiniRecordingView: RecordingWindowView {
 
     override var preferredSize: NSSize { Self.windowSize }
 
-    private static func size(of visual: Visual) -> CGSize {
+    private static let lockedActiveSize = CGSize(width: 100, height: 30)
+
+    private func size(of visual: Visual) -> CGSize {
         switch visual {
-        case .sleep: sleepSize
-        case .toolbar: toolbarSize
-        case .active: activeSize
+        case .sleep: Self.sleepSize
+        case .toolbar: Self.toolbarSize
+        case .active: isLocked && mode == .recording ? Self.lockedActiveSize : Self.activeSize
         }
     }
 
@@ -152,7 +164,7 @@ final class MiniRecordingView: RecordingWindowView {
 
     private func apply(_ next: Visual, animated: Bool) {
         visual = next
-        let size = Self.size(of: next)
+        let size = size(of: next)
         let frame = anchoredRect(size)
         let centre = CGPoint(x: size.width / 2, y: size.height / 2)
 
@@ -167,6 +179,9 @@ final class MiniRecordingView: RecordingWindowView {
                           cornerHeight: size.height / 2, transform: nil), animated)
             for row in [barRow, buttonRow] { spring(row, "position", NSValue(point: centre), animated) }
             spring(buttonRow, "transform", CATransform3DMakeScale(next == .toolbar ? 1 : 0.7, next == .toolbar ? 1 : 0.7, 1), animated)
+            let locked = next == .active && isLocked && mode == .recording
+            spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 6 : 0, 0, 0), animated)
+            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + 12, y: 0)), animated)
             hoverPad.frame = frame.insetBy(dx: -10, dy: -9)
         }
 
@@ -194,6 +209,7 @@ final class MiniRecordingView: RecordingWindowView {
             capsule.shadowRadius = 8
         }
         fade(barRow, to: next == .active ? 1 : 0, animated: animated)
+        updateLockDot(visible: next == .active && isLocked && mode == .recording)
         fade(buttonRow, to: next == .toolbar ? 1 : 0, animated: animated)
         for (index, button) in buttons.enumerated() {
             button.icon.opacity = iconOpacity(index)
@@ -254,7 +270,6 @@ final class MiniRecordingView: RecordingWindowView {
         case .recording:
             stopAnimations()
             apply(.active, animated: window?.isVisible == true)
-            withoutAnimation { levelsDidChange() }
         case .processing:
             apply(.active, animated: false)
             startWave()
@@ -377,41 +392,75 @@ final class MiniRecordingView: RecordingWindowView {
 
     // MARK: Waveform
 
-    override func levelsDidChange() {
-        guard visual == .active, mode == .recording else { return }
-        let half = Self.barCount / 2
-        for (index, bar) in bars.enumerated() {
-            let distance = abs(index - half)
-            let taper = 1 - 0.55 * pow(CGFloat(distance) / CGFloat(half), 2)
-            let height = CGFloat(levels[distance]) * Self.maxBarHeight * taper
-            bar.bounds.size.height = max(Self.barWidth, height)
+    override func lockDidChange() {
+        guard visual == .active else { return }
+        apply(.active, animated: window?.isVisible == true)
+    }
+
+    /// The live dot breathes slowly (30 fps cap) while hands-free.
+    private func updateLockDot(visible: Bool) {
+        if visible, lockDot.animation(forKey: "breathe") == nil {
+            lockDot.opacity = 1
+            let breathe = CABasicAnimation(keyPath: "opacity")
+            breathe.fromValue = 1
+            breathe.toValue = 0.35
+            breathe.duration = 0.9
+            breathe.autoreverses = true
+            breathe.repeatCount = .infinity
+            breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            breathe.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 30)
+            lockDot.add(breathe, forKey: "breathe")
+        } else if !visible {
+            lockDot.removeAnimation(forKey: "breathe")
+            lockDot.opacity = 0
         }
     }
 
-    /// Processing: bars settle to dots, then a wave ripples out from the centre.
+    override func levelPushed(_ level: Float) {
+        guard visual == .active, mode == .recording else { return }
+        waveform.push(level, animated: window?.isVisible == true)
+    }
+
+    override func resetLevelsDidHappen() {
+        waveform.reset()
+    }
+
+    /// Processing: the waveform steps aside for three dots pulsing in turn.
     private func startWave() {
-        withoutAnimation {
-            for bar in bars { bar.bounds.size.height = Self.barWidth }
-        }
+        waveform.reset()
+        withoutAnimation { waveform.layer.opacity = 0 }
         let now = CACurrentMediaTime()
-        let half = Self.barCount / 2
-        for (index, bar) in bars.enumerated() {
-            let wave = CABasicAnimation(keyPath: "bounds.size.height")
-            wave.fromValue = Self.barWidth
-            wave.toValue = Self.maxBarHeight * 0.55
-            wave.duration = 0.42
-            wave.autoreverses = true
-            wave.repeatCount = .infinity
-            wave.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            wave.beginTime = now + Double(abs(index - half)) * 0.07
-            wave.fillMode = .backwards
-            wave.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
-            bar.add(wave, forKey: "wave")
+        for (index, dot) in dots.enumerated() {
+            withoutAnimation { dot.opacity = 0.35 }
+            let pulse = CAKeyframeAnimation(keyPath: "opacity")
+            pulse.values = [0.35, 1, 0.35]
+            pulse.keyTimes = [0, 0.4, 1]
+            pulse.duration = 0.9
+            pulse.repeatCount = .infinity
+            pulse.beginTime = now + Double(index) * 0.15
+            pulse.fillMode = .backwards
+            pulse.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+            dot.add(pulse, forKey: "pulse")
+            let grow = CAKeyframeAnimation(keyPath: "transform.scale")
+            grow.values = [0.8, 1.15, 0.8]
+            grow.keyTimes = [0, 0.4, 1]
+            grow.duration = 0.9
+            grow.repeatCount = .infinity
+            grow.beginTime = pulse.beginTime
+            grow.fillMode = .backwards
+            grow.preferredFrameRateRange = pulse.preferredFrameRateRange
+            dot.add(grow, forKey: "grow")
         }
     }
 
     override func stopAnimations() {
-        for bar in bars { bar.removeAnimation(forKey: "wave") }
+        withoutAnimation {
+            for dot in dots {
+                dot.removeAllAnimations()
+                dot.opacity = 0
+            }
+            waveform.layer.opacity = 1
+        }
     }
 
     private static func symbol(_ name: String) -> Any? {
