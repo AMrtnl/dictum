@@ -35,8 +35,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Dictum
-        CFBundleShortVersionString: "1.1.0"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "3"
         LSUIElement: true
         NSMicrophoneUsageDescription: Dictum listens only while you hold the dictation shortcut, and transcribes on this Mac.
         LSApplicationCategoryType: public.app-category.productivity

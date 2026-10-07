@@ -17,6 +17,8 @@ On-device dictation for Apple Silicon Macs, powered by Cohere Transcribe and Tin
   - **Small window:** sleeps as a thin translucent pill when idle. Hover it for ✦ Rewrite, Settings and ⤢ Expand. Drag it to snap to the top or bottom of the screen, centred or in a corner.
   - **Large window (Classic):** moves freely and resizes from its edges. Its ↘↖ button returns to the pill.
   - Both are fully opaque while recording.
+- **Home window** in the style of superwhisper. A sidebar holds Home, Modes, Vocabulary, Configuration, Sound, Models library and History. Home shows your average WPM, words, apps used and time saved.
+- **Vocabulary:** teach Dictum how to write names and terms, with optional "heard as" spellings. It's applied to every transcript.
 - **History** keeps both the rewrite and the original. Failed dictations keep their audio so you can retry them. **Paste Last** is on ⌃⌥V.
 - Mic picker, language hint, sounds, launch at login, and "keep models loaded for" to trade memory against first-use speed.
 

@@ -76,7 +76,7 @@ final class MiniRecordingView: RecordingWindowView {
         buttons = [
             Button(tooltip: { [unowned self] in rewriteOn ? "Rewrite on" : "Rewrite off" },
                    action: { [unowned self] in onToggleRewrite?() }),
-            Button(tooltip: { "Settings" }, action: { [unowned self] in onOpenSettings?() }),
+            Button(tooltip: { "Open Dictum" }, action: { [unowned self] in onOpenSettings?() }),
             Button(tooltip: { "Expand window" }, action: { [unowned self] in onToggleSize?() }),
         ]
         let symbols = ["sparkle", "waveform", "arrow.up.left.and.arrow.down.right"]

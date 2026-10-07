@@ -108,6 +108,7 @@ private struct MenuContent: View {
         }
         Divider()
 
+        Button("Open Dictum…") { WindowManager.shared.show(.home) }
         Button("History…") { WindowManager.shared.show(.history) }
         Button("Settings…") { WindowManager.shared.show(.settings) }
             .keyboardShortcut(",")

@@ -165,7 +165,9 @@ final class DictationController {
 
     // MARK: - Processing
 
-    private func process(_ take: AudioRecorder.Take, mode: DictationMode) async {
+    /// - Parameter deliverText: false only for the debug file test, which must never
+    ///   paste into (or touch the clipboard of) whatever app is in front.
+    private func process(_ take: AudioRecorder.Take, mode: DictationMode, deliverText: Bool = true) async {
         do {
             var text = try await engine.transcribe(take.url, language: settings.language)
             guard !Task.isCancelled else { return discard(take) }
@@ -192,14 +194,17 @@ final class DictationController {
                 }
             }
 
+            text = VocabularyStore.shared.apply(to: text)
+            original = original.map(VocabularyStore.shared.apply)
+            let app = NSWorkspace.shared.frontmostApplication?.localizedName
             discard(take)
             finish()
-            deliver(text)
+            if deliverText { deliver(text) }
             lastText = text
             if settings.saveHistory {
                 HistoryStore.shared.add(HistoryEntry(
                     text: text, original: original, duration: take.duration,
-                    mode: mode.rawValue, language: settings.language.rawValue))
+                    mode: mode.rawValue, language: settings.language.rawValue, app: app))
             }
             if let note { showToast(note, symbol: "info.circle.fill") }
         } catch {
@@ -239,8 +244,9 @@ final class DictationController {
                 text = cleaned
             }
             var updated = entry
-            updated.text = text
-            updated.original = original
+            updated.text = VocabularyStore.shared.apply(to: text)
+            updated.original = original.map(VocabularyStore.shared.apply)
+            text = updated.text
             updated.status = .done
             updated.audioPath = nil
             try? FileManager.default.removeItem(atPath: path)
@@ -324,7 +330,7 @@ final class DictationController {
                 guard let self else { return }
                 settings.mode = settings.mode == .rewrite ? .dictation : .rewrite
             }
-            view?.onOpenSettings = { WindowManager.shared.show(.settings) }
+            view?.onOpenSettings = { WindowManager.shared.show(.home) }
             view?.rewriteOn = settings.mode == .rewrite
             panel = view.map { RecordingPanel(content: $0, positionKey: config.style.rawValue) }
         }
@@ -414,7 +420,7 @@ final class DictationController {
         let panel = currentPanel()
         panel?.content.mode = .processing
         panel?.show()
-        await process(AudioRecorder.Take(url: copy, duration: 0, peakLevel: 1), mode: mode)
+        await process(AudioRecorder.Take(url: copy, duration: 0, peakLevel: 1), mode: mode, deliverText: false)
         log.info("debug transcript: \(self.lastText ?? "<none>", privacy: .public)")
     }
 

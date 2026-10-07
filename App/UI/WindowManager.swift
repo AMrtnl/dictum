@@ -4,28 +4,38 @@ import SwiftUI
 /// Opens Dictum's few windows. AppKit-managed so a menu-bar-only app can bring them
 /// to the front reliably; each window is released when closed, freeing its memory.
 final class WindowManager: NSObject, NSWindowDelegate {
-    enum Kind { case settings, onboarding, history }
+    /// `home`, `settings` and `history` are pages of the one main window.
+    enum Kind { case home, settings, history, onboarding }
+
+    private enum WindowID { case main, onboarding }
 
     static let shared = WindowManager()
 
-    private var windows: [Kind: NSWindow] = [:]
+    private var windows: [WindowID: NSWindow] = [:]
 
     func show(_ kind: Kind) {
-        let window = windows[kind] ?? make(kind)
-        windows[kind] = window
+        let id: WindowID
+        switch kind {
+        case .onboarding: id = .onboarding
+        case .home: id = .main; MainNavigation.shared.page = .home
+        case .settings: id = .main; MainNavigation.shared.page = .configuration
+        case .history: id = .main; MainNavigation.shared.page = .history
+        }
+        let window = windows[id] ?? make(id)
+        windows[id] = window
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
     func close(_ kind: Kind) {
-        windows[kind]?.close()
+        windows[kind == .onboarding ? .onboarding : .main]?.close()
     }
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              let kind = windows.first(where: { $0.value === window })?.key else { return }
-        windows[kind] = nil
-        if kind == .onboarding { AppSettings.shared.hasCompletedOnboarding = true }
+              let id = windows.first(where: { $0.value === window })?.key else { return }
+        windows[id] = nil
+        if id == .onboarding { AppSettings.shared.hasCompletedOnboarding = true }
         // A menu-bar app stays active after its last window closes, leaving no app to
         // paste into; hiding hands focus back to the app the user was working in.
         if windows.isEmpty {
@@ -33,35 +43,30 @@ final class WindowManager: NSObject, NSWindowDelegate {
         }
     }
 
-    private func make(_ kind: Kind) -> NSWindow {
+    private func make(_ id: WindowID) -> NSWindow {
         let window: NSWindow
-        switch kind {
-        case .settings:
-            window = NSWindow(contentViewController: SettingsTabs())
-            window.styleMask = [.titled, .closable]
+        switch id {
+        case .main:
+            window = NSWindow(contentViewController: NSHostingController(rootView: MainWindowView()))
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.title = "Dictum"
+            window.titleVisibility = .hidden
+            window.toolbarStyle = .unified
+            window.setContentSize(NSSize(width: 940, height: 660))
+            window.setFrameAutosaveName("DictumMain")
         case .onboarding:
-            window = NSWindow(contentViewController: hosting(OnboardingView()))
+            let controller = NSHostingController(rootView: OnboardingView())
+            controller.sizingOptions = .preferredContentSize
+            window = NSWindow(contentViewController: controller)
             window.styleMask = [.titled, .closable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.title = "Welcome to Dictum"
             window.titleVisibility = .hidden
-        case .history:
-            window = NSWindow(contentViewController: hosting(HistoryView()))
-            window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            window.title = "History"
-            window.setContentSize(NSSize(width: 620, height: 560))
-            window.minSize = NSSize(width: 460, height: 360)
         }
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.center()
+        if id == .onboarding || !window.setFrameUsingName("DictumMain") { window.center() }
         return window
-    }
-
-    private func hosting(_ view: some View) -> NSViewController {
-        let controller = NSHostingController(rootView: view)
-        controller.sizingOptions = .preferredContentSize
-        return controller
     }
 }
 
@@ -72,12 +77,14 @@ extension WindowManager {
     func snapshot(to directory: URL) {
         let views: [(String, AnyView)] = [
             ("onboarding", AnyView(OnboardingView())),
-            ("settings-general", AnyView(GeneralSettings().frame(width: 540))),
-            ("settings-recording", AnyView(RecordingSettings().frame(width: 540))),
-            ("settings-models", AnyView(ModelSettings().frame(width: 540))),
-            ("settings-history", AnyView(HistorySettings().frame(width: 540))),
-            ("settings-about", AnyView(AboutSettings().frame(width: 540))),
-            ("history", AnyView(HistoryView().frame(width: 620, height: 480))),
+            ("main", AnyView(MainWindowView().frame(width: 940, height: 660))),
+            ("home", AnyView(HomeView().frame(width: 700, height: 640))),
+            ("modes", AnyView(ModesPage().frame(width: 700, height: 360))),
+            ("vocabulary", AnyView(VocabularyView().frame(width: 700, height: 420))),
+            ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 980))),
+            ("sound", AnyView(SoundPage().frame(width: 700, height: 300))),
+            ("models", AnyView(ModelSettings().frame(width: 700, height: 640))),
+            ("history", AnyView(HistoryPage().frame(width: 700, height: 420))),
         ]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
@@ -103,26 +110,3 @@ extension WindowManager {
     }
 }
 #endif
-
-/// Classic toolbar-tab preferences window; each tab is a SwiftUI form.
-private final class SettingsTabs: NSTabViewController {
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        tabStyle = .toolbar
-        add("General", "gearshape", GeneralSettings())
-        add("Recording", "waveform", RecordingSettings())
-        add("Models", "cpu", ModelSettings())
-        add("History", "clock.arrow.circlepath", HistorySettings())
-        add("About", "info.circle", AboutSettings())
-    }
-
-    private func add(_ title: String, _ symbol: String, _ view: some View) {
-        let host = NSHostingController(rootView: view.frame(width: 540).fixedSize(horizontal: false, vertical: true))
-        host.sizingOptions = .preferredContentSize
-        host.title = title
-        let item = NSTabViewItem(viewController: host)
-        item.label = title
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        addTabViewItem(item)
-    }
-}

@@ -15,6 +15,8 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var status: Status = .done
     /// Kept only for failed entries, so they can be retried.
     var audioPath: String?
+    /// The app the text was pasted into.
+    var app: String?
 }
 
 /// Recent dictations, stored as JSON in Application Support.
