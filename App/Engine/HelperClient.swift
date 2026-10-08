@@ -9,11 +9,12 @@ nonisolated struct HelperRequest: Encodable, Sendable {
     var text: String?
     var model: String?
     var vocabulary: [String]?
+    var rewrite: Bool?
     var asrIdle: Int?
     var rewriteIdle: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, op, path, language, text, model, vocabulary
+        case id, op, path, language, text, model, vocabulary, rewrite
         case asrIdle = "asr_idle", rewriteIdle = "rewrite_idle"
     }
 }

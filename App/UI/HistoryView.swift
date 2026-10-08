@@ -67,8 +67,8 @@ private struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Group {
-                if let icon = AppIcons.icon(for: entry.appBundleID) {
-                    Image(nsImage: icon).resizable()
+                if entry.status != .failed, entry.appBundleID != nil || entry.app != nil {
+                    Image(nsImage: AppIcons.icon(for: entry.appBundleID, name: entry.app)).resizable()
                 } else {
                     Image(systemName: entry.status == .failed ? "exclamationmark.triangle" : "waveform")
                         .foregroundStyle(.secondary)

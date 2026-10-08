@@ -21,6 +21,17 @@ struct DictumApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = Permissions.shared
+        #if DEBUG
+        // Snapshots only draw windows: no hotkeys, no helper (the installed app owns the socket).
+        if let path = UserDefaults.standard.string(forKey: "snapshotUI") {
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                WindowManager.shared.snapshot(to: URL(fileURLWithPath: path))
+                NSApplication.shared.terminate(nil)
+            }
+            return
+        }
+        #endif
         DictationController.shared.start()
         Task {
             await SpeechEngine.shared.bootstrap()
@@ -39,13 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let log = Logger(subsystem: "ch.martinoli.dictum", category: "debug")
             log.info("permissions: accessibility=\(AXIsProcessTrusted()) secureInput=\(IsSecureEventInputEnabled()) microphone=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
             NSApplication.shared.terminate(nil)
-        }
-        if let path = UserDefaults.standard.string(forKey: "snapshotUI") {
-            Task {
-                try? await Task.sleep(for: .seconds(1.5))
-                WindowManager.shared.snapshot(to: URL(fileURLWithPath: path))
-                NSApplication.shared.terminate(nil)
-            }
         }
         if let path = UserDefaults.standard.string(forKey: "debugTranscribe") {
             let mode = UserDefaults.standard.string(forKey: "debugMode").flatMap(DictationMode.init) ?? .dictation

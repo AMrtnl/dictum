@@ -35,6 +35,7 @@ final class DictationController {
     /// Hands-free: recording continues after the shortcut is released, until it is pressed again.
     @ObservationIgnored private var isLocked = false
     @ObservationIgnored private var processingTask: Task<Void, Never>?
+    @ObservationIgnored private var aheadTask: Task<Void, Never>?
     @ObservationIgnored private var cancelListeners: [Task<Void, Never>] = []
     @ObservationIgnored private var lastText: String?
     @ObservationIgnored private var askedForAccessibility = false
@@ -101,6 +102,8 @@ final class DictationController {
         log.info("recording (\(self.activeMode.rawValue, privacy: .public))")
         state = .recording
         recordingStart = .now
+        engine.prepare(rewrite: activeMode == .rewrite)
+        transcribeWhileRecording()
         setLocked(settings.shortcutBehavior == .toggle)
         listenForCancel()
         Sounds.playStart()
@@ -117,7 +120,8 @@ final class DictationController {
         switch settings.shortcutBehavior {
         case .hybrid where held < Self.tapThreshold:
             setLocked(true)  // a tap: keep recording hands-free
-            if lockHintsShown < 3 {
+            // The large window already shows the stop keys; the small one gets a hint, 3 times.
+            if lockHintsShown < 3, settings.recordingWindowStyle != .classic {
                 lockHintsShown += 1
                 let keys = Self.keys(for: activeShortcut).joined()
                 showToast("Hands-free — press \(keys) again to stop", symbol: "lock.fill")
@@ -135,6 +139,7 @@ final class DictationController {
         guard state == .recording else { return }
         recordingStart = nil
         setLocked(false)
+        aheadTask?.cancel()
         guard let take = recorder.stop() else {
             Sounds.playEmpty()
             finish()
@@ -191,7 +196,7 @@ final class DictationController {
             break
         }
         if case .installing(let fraction) = engine.rewriteModel, fraction >= 0.999 {
-            showToast("Finishing the Rewrite model install — try again in a moment", symbol: "arrow.down.circle.fill")
+            showToast("Rewrite is still installing — try again in a moment", symbol: "arrow.down.circle.fill")
             return false
         }
         let permissions = Permissions.shared
@@ -203,7 +208,7 @@ final class DictationController {
             Task { await permissions.requestMicrophone() }
             return false
         case .denied:
-            showToast("Microphone access is off — enable it in System Settings", symbol: "mic.slash.fill")
+            showToast("Microphone access is off — turn it on in System Settings", symbol: "mic.slash.fill")
             permissions.open("Privacy_Microphone")
             return false
         }
@@ -214,8 +219,10 @@ final class DictationController {
     /// - Parameter deliverText: false only for the debug file test, which must never
     ///   paste into (or touch the clipboard of) whatever app is in front.
     private func process(_ take: AudioRecorder.Take, mode: DictationMode, deliverText: Bool = true) async {
+        let started = ContinuousClock.now
         do {
             var (text, language) = try await transcribe(take.url)
+            let transcribed = ContinuousClock.now - started
             guard !Task.isCancelled else { return discard(take) }
             var original: String?
             if text.isEmpty {
@@ -236,7 +243,7 @@ final class DictationController {
                     }
                     guard !Task.isCancelled else { return discard(take) }
                 } else {
-                    note = "Rewrite model not installed — pasted the plain transcript"
+                    note = "Pasted without Rewrite — its model isn't installed"
                 }
             }
 
@@ -252,6 +259,11 @@ final class DictationController {
             }
             discard(take)
             finish()
+            log.info("""
+                \(take.duration, format: .fixed(precision: 1), privacy: .public)s take: \
+                transcribed in \(transcribed.seconds, format: .fixed(precision: 2), privacy: .public)s, \
+                ready in \((ContinuousClock.now - started).seconds, format: .fixed(precision: 2), privacy: .public)s
+                """)
             if deliverText { deliver(text) }
             lastText = text
             if settings.saveHistory {
@@ -278,8 +290,7 @@ final class DictationController {
     private func transcribe(_ url: URL) async throws -> (String, String) {
         let model = settings.speechModel
         if model.detectsLanguage {
-            let hint: SpeechLanguage? = settings.autoLanguage ? nil : settings.language
-            let words = model.usesVocabulary ? VocabularyStore.shared.terms.map(\.word) : []
+            let (hint, words) = speechHints()
             let result = try await engine.transcribe(url, language: hint, vocabulary: words)
             return (result.text, result.language ?? hint?.rawValue ?? "en")
         }
@@ -298,20 +309,43 @@ final class DictationController {
         return (try await engine.transcribe(url, language: detected).text, detected.rawValue)
     }
 
+    /// For models that detect the language: a forced language (auto off) and Vocabulary hints.
+    private func speechHints() -> (SpeechLanguage?, [String]) {
+        let hint: SpeechLanguage? = settings.autoLanguage ? nil : settings.language
+        let words = settings.speechModel.usesVocabulary ? VocabularyStore.shared.terms.map(\.word) : []
+        return (hint, words)
+    }
+
+    /// Long dictations: the helper transcribes each finished stretch (up to a pause) while the
+    /// user keeps talking, so stopping only waits for the last few seconds, not the whole take.
+    /// Only for the models that split takes at pauses (Qwen3, Nemotron); Cohere is fast enough.
+    private func transcribeWhileRecording() {
+        aheadTask?.cancel()
+        guard settings.speechModel.detectsLanguage, let url = recorder.recordingURL else { return }
+        let (hint, words) = speechHints()
+        aheadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))  // shorter takes are quick to do in one go
+            while !Task.isCancelled, self?.state == .recording {
+                await self?.engine.transcribeAhead(url, language: hint, vocabulary: words)
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
+    }
+
     private func deliver(_ text: String) {
         Task {
             switch await TextInserter.insert(text, keepInClipboard: settings.keepInClipboard) {
             case .pasted:
                 break
             case .copiedOnly:
-                showToast("Copied — Dictum needs Accessibility access to paste automatically", symbol: "doc.on.clipboard.fill")
+                showToast("Copied — allow Accessibility to paste automatically", symbol: "doc.on.clipboard.fill")
                 // Once per launch, bring up macOS's own prompt / the Accessibility pane.
                 if !askedForAccessibility {
                     askedForAccessibility = true
                     Permissions.shared.requestAccessibility()
                 }
             case .secureInput:
-                showToast("Secure input is on in this app — press ⌘V to paste", symbol: "lock.fill")
+                showToast("Secure input is on here — press ⌘V to paste", symbol: "lock.fill")
             }
         }
     }
@@ -365,6 +399,7 @@ final class DictationController {
         log.info("cancelled")
         recordingStart = nil
         setLocked(false)
+        aheadTask?.cancel()
         recorder.cancel()
         processingTask?.cancel()
         finish()
@@ -477,19 +512,32 @@ final class DictationController {
         }
     }
 
+    /// A short message. The small window shows it in a bubble beside the pill; the large
+    /// window gets a toast over it; with no window, the toast goes where the pill would be.
     func showToast(_ message: String, symbol: String = "exclamationmark.circle.fill") {
         toastTask?.cancel()
         toast?.orderOut(nil)
-        if state == .idle { panel?.orderOut(nil) }  // the toast takes the indicator's spot
+        toast = nil
+        let seconds = 2.2 + Double(message.count) * 0.03
+        if let panel, let mini = panel.content as? MiniRecordingView {
+            mini.showMessage(message, symbol: symbol)
+            panel.show()
+            toastTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(seconds))
+                guard !Task.isCancelled else { return }
+                mini.hideMessage()
+                self?.refreshIndicator()  // puts the pill away again unless it's always shown
+            }
+            return
+        }
         let toast = RecordingPanel(content: ToastView(message, symbol: symbol),
                                    anchor: RecordingPanel.Anchor.saved(for: RecordingWindowStyle.mini.rawValue))
         self.toast = toast
-        toast.show()
-        toastTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.6))
+        toast.show(centredOn: panel.map { $0.content.surfaceFrame.offsetBy(dx: $0.frame.minX, dy: $0.frame.minY) })
+        toastTask = Task {
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             toast.hide()
-            self?.refreshIndicator()
         }
     }
 
@@ -497,6 +545,7 @@ final class DictationController {
         toastTask?.cancel()
         toast?.orderOut(nil)
         toast = nil
+        (panel?.content as? MiniRecordingView)?.hideMessage()
     }
 
     /// Key caps for a shortcut, e.g. ["⌥", "Space"].
@@ -533,4 +582,8 @@ final class DictationController {
         }
     }
     #endif
+}
+
+private extension Duration {
+    nonisolated var seconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }

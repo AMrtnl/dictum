@@ -310,3 +310,151 @@ func updateShadowPath(_ surface: CALayer) {
         roundedRect: surface.bounds, cornerWidth: surface.cornerRadius, cornerHeight: surface.cornerRadius, transform: nil
     )
 }
+
+/// "Working on it": a row of dim dots with a glow travelling across them, left to right.
+/// Each dot runs its own staggered keyframe animation in the window server (30 fps cap).
+final class ProcessingDots {
+    let layer = CALayer()
+    private var dots: [CALayer] = []
+    private let diameter: CGFloat
+    private let spacing: CGFloat
+
+    init(diameter: CGFloat, spacing: CGFloat) {
+        self.diameter = diameter
+        self.spacing = spacing
+        layer.opacity = 0
+    }
+
+    /// Fills `rect` (the parent's coordinates) with as many dots as fit, centred.
+    func layout(in rect: CGRect, maximumCount: Int = 64) {
+        let count = max(3, min(maximumCount, Int((rect.width + spacing - diameter) / spacing)))
+        withoutAnimation {
+            layer.frame = rect
+            if dots.count != count {
+                dots.forEach { $0.removeFromSuperlayer() }
+                dots = (0..<count).map { _ in
+                    let dot = CALayer()
+                    dot.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+                    dot.cornerRadius = diameter / 2
+                    dot.backgroundColor = NSColor.white.cgColor
+                    dot.opacity = 0.22
+                    layer.addSublayer(dot)
+                    return dot
+                }
+            }
+            let width = CGFloat(count - 1) * spacing
+            for (index, dot) in dots.enumerated() {
+                dot.position = CGPoint(x: rect.width / 2 - width / 2 + CGFloat(index) * spacing, y: rect.height / 2)
+            }
+        }
+        if layer.opacity > 0 { start() }
+    }
+
+    func start() {
+        layer.opacity = 1
+        let now = CACurrentMediaTime()
+        // The glow crosses the row in ~0.9 s whatever its length, then the row rests briefly.
+        let travel = 0.9
+        let period = travel + 0.45
+        for (index, dot) in dots.enumerated() {
+            dot.removeAllAnimations()
+            let offset = travel * Double(index) / Double(max(1, dots.count - 1))
+            let glow = CAKeyframeAnimation(keyPath: "opacity")
+            glow.values = [0.22, 1, 0.22, 0.22]
+            glow.keyTimes = [0, 0.16, 0.42, 1]
+            glow.duration = period
+            glow.repeatCount = .infinity
+            glow.beginTime = now + offset
+            glow.fillMode = .backwards
+            glow.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+            dot.add(glow, forKey: "glow")
+            let grow = CAKeyframeAnimation(keyPath: "transform.scale")
+            grow.values = [1, 1.35, 1, 1]
+            grow.keyTimes = glow.keyTimes
+            grow.duration = period
+            grow.repeatCount = .infinity
+            grow.beginTime = glow.beginTime
+            grow.fillMode = .backwards
+            grow.preferredFrameRateRange = glow.preferredFrameRateRange
+            dot.add(grow, forKey: "grow")
+        }
+    }
+
+    func stop() {
+        withoutAnimation {
+            layer.opacity = 0
+            dots.forEach { $0.removeAllAnimations() }
+        }
+    }
+}
+
+/// A small dark bubble with an icon and one line of text: messages next to the pill.
+final class MessageBubble {
+    let layer = CALayer()
+    private let icon = CALayer()
+    private let label = CATextLayer()
+    private static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let height: CGFloat = 30
+
+    init() {
+        layer.cornerRadius = Self.height / 2
+        layer.backgroundColor = NSColor(white: 0.09, alpha: 0.96).cgColor
+        layer.borderWidth = 1
+        layer.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = 0.3
+        layer.shadowRadius = 8
+        layer.shadowOffset = CGSize(width: 0, height: -2)
+        layer.opacity = 0
+        icon.contentsGravity = .resizeAspect
+        layer.addSublayer(icon)
+        label.font = Self.font
+        label.fontSize = Self.font.pointSize
+        label.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
+        label.contentsScale = 2
+        label.truncationMode = .end
+        layer.addSublayer(label)
+    }
+
+    /// Sets the message and returns the bubble's size (at most `maximumWidth` wide).
+    func set(_ text: String, symbol: String?, maximumWidth: CGFloat) -> CGSize {
+        let iconWidth: CGFloat = symbol == nil ? 0 : 22
+        let textWidth = min(textSize(text, font: Self.font).width, maximumWidth - 28 - iconWidth)
+        let size = CGSize(width: textWidth + 28 + iconWidth, height: Self.height)
+        withoutAnimation {
+            icon.contents = symbol.flatMap {
+                NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(
+                        NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+                            .applying(NSImage.SymbolConfiguration(paletteColors: [.white.withAlphaComponent(0.75)]))
+                    )?
+                    .layerContents(forContentsScale: 2)
+            }
+            icon.frame = CGRect(x: 13, y: (Self.height - 14) / 2, width: 15, height: 14)
+            label.string = text
+            let textHeight = textSize(text, font: Self.font).height
+            label.frame = CGRect(x: 14 + iconWidth, y: (Self.height - textHeight) / 2, width: textWidth, height: textHeight)
+            layer.bounds = CGRect(origin: .zero, size: size)
+            layer.shadowPath = CGPath(roundedRect: layer.bounds, cornerWidth: Self.height / 2,
+                                      cornerHeight: Self.height / 2, transform: nil)
+        }
+        return size
+    }
+
+    /// Fades in with a small lift toward `rise` (+1 up, −1 down); fades out in place.
+    func setVisible(_ visible: Bool, rise: CGFloat) {
+        let from = layer.presentation()?.opacity ?? layer.opacity
+        layer.opacity = visible ? 1 : 0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from
+        fade.toValue = layer.opacity
+        fade.duration = visible ? 0.22 : 0.16
+        layer.add(fade, forKey: "fade")
+        guard visible, from < 0.05 else { return }
+        let lift = CASpringAnimation(perceptualDuration: 0.38, bounce: 0.2)
+        lift.keyPath = "transform.translation.y"
+        lift.fromValue = -6 * rise
+        lift.toValue = 0
+        layer.add(lift, forKey: "lift")
+    }
+}

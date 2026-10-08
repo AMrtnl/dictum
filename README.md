@@ -20,14 +20,19 @@ On-device dictation for Apple Silicon Macs: Qwen3-ASR or Cohere Transcribe for s
 - **Rewrite mode.** Hold ⌥⇧Space, or make Rewrite the default, and Tiny Aya removes fillers, false starts and self-corrections. If its rewrite drifts from what you said, Dictum pastes your plain transcript instead.
 - **Vocabulary:** teach Dictum names and terms. Qwen3 uses them as hints, and every transcript is corrected with them.
 - **Recording window**, fully opaque while recording:
-  - **Small window:** sleeps as a thin pill. Hover it for ✦ Rewrite, Home and ⤢ Expand. Drag it to snap to a screen edge or corner.
-  - **Large window:** moves freely and resizes from its edges.
+  - **Small window:** sleeps as a thin pill. Hover it for ✦ Rewrite, Home and ⤢ Expand. Drag it to snap to a screen edge or corner. Messages ("No speech detected") appear in a bubble beside it.
+  - **Large window:** moves freely and resizes from its edges. Its key hints follow what you can do: Start, Stop or Cancel.
+  - While transcribing, a glow runs along a row of dots. Hands-free dictation shows a red live dot.
 - **Seven waveform styles:** Conveyor (default), Ripple, Wave, Equalizer, Ribbon, Aurora and Dot Matrix.
 - **Home window:**
   - Words per minute, words, apps used, time saved, an activity chart, languages and top apps.
   - Pages for Modes, Vocabulary, Configuration, Sound, the Models library, History and Training data.
 - **History** is grouped by day and keeps both the rewrite and the original. Failed dictations keep their audio so you can retry them. **Paste Last** is on ⌃⌥V.
 - **Training data (optional).** Saves each dictation's audio and word-for-word transcript as a Hugging Face "audiofolder" dataset. Correct transcripts, then export to fine-tune a model on your voice.
+- **Quick to paste when you stop:** about 0.8 s with Qwen3, however long you talked.
+  - The speech model stays in RAM, so macOS can't swap it out between dictations.
+  - It warms up as soon as you start talking.
+  - Long dictations are transcribed stretch by stretch while you're still speaking.
 - **Light on resources:** 0 % CPU and no wakeups between dictations. See [Resource use](#resource-use).
 
 <p align="center"><img src="docs/images/onboarding.png" width="420" alt="Welcome window"> <img src="docs/images/settings-recording.png" width="400" alt="Recording settings"></p>
@@ -86,6 +91,10 @@ Dictum.app (Swift)                              dictum_helper.py (Python, MLX)
   - The microphone is open only while you dictate.
   - Audio streams to a WAV file as it's recorded, so long hands-free dictations don't build up in memory.
 - **The helper** runs from `~/Library/Application Support/Dictum/runtime`, a private virtualenv with `mlx-speech` and `mlx-lm`. It answers JSON lines on a Unix socket, does nothing between requests, and exits when the app quits.
+- **Latency.**
+  - When a dictation starts, the app asks the helper to `prepare`: load the model, or wake it after a long idle.
+  - During long takes, every few seconds it asks for a `partial`: the helper transcribes each finished stretch (up to a pause) of the WAV still being written.
+  - When you stop, only the last stretch is left.
 - **Language detection with Cohere.** Cohere can't detect the language itself, so the app runs macOS's on-device NaturalLanguage recognizer on the transcript. If the transcript is in another of your languages, it re-transcribes with that language.
 
 ## Resource use
@@ -96,12 +105,15 @@ Measured on an M4 Pro (Release build):
 |---|---|---|
 | App, idle | 0.0 %, no wakeups | ~23 MB |
 | App, recording (waveform at 30 Hz) | ~1 % | ~20 MB |
-| Speech model loaded (Qwen3; "Keep loaded: Always") | 0.0 % idle | ~2.5 GB (Cohere: ~1.6 GB) |
+| Speech model loaded (Qwen3; "Keep loaded: Always") | 0.0 % idle | ~2.5 GB, kept in RAM (Cohere: ~1.6 GB) |
 | + Rewrite model, while loaded (unloads after 1 min) | — | +1.9 GB |
-| Transcribing a 10 s take | — | 0.6 s (Qwen3) / 0.2 s (Cohere) |
+| Wait after you stop, 10 s take | — | 0.8 s (Qwen3) / 0.2 s (Cohere) |
+| Wait after you stop, 73 s take | — | 0.8 s (Qwen3; was 4.6 s before transcribing while recording) |
 | Rewriting a sentence | — | ~0.8 s (first use ~2.5 s) |
 
-"Keep loaded" can free the speech model between bursts of dictation. The recording window is drawn with Core Animation layers; a SwiftUI version cost 4–8 % CPU and 153 MB.
+"Keep loaded" can free the speech model between bursts of dictation.
+
+While loaded, the speech model's memory is *wired*: macOS keeps it in RAM instead of swapping it to disk. On a Mac short of memory (another app using most of it), an idle model used to be swapped out. Paging 2.5 GB back in then delayed the next dictation by up to ~18 s. The recording window is drawn with Core Animation layers; a SwiftUI version cost 4–8 % CPU and 153 MB.
 
 ## Privacy
 

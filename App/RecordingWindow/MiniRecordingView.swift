@@ -3,8 +3,10 @@ import QuartzCore
 
 /// The small window, superwhisper-style. At rest it sleeps as a thin translucent
 /// pill hugging a screen edge or corner; hovering grows it into a toolbar
-/// (✦ Rewrite, Settings, Expand); while dictating it is a black capsule with a
-/// centred, mirrored waveform. Shapes morph with Core Animation, in the window server.
+/// (✦ Rewrite, Home, Expand); while dictating it is a black capsule with a live
+/// waveform, and while transcribing a glow runs along a row of dots. Messages
+/// ("No speech detected") appear in a bubble beside the pill. Shapes morph with
+/// Core Animation, in the window server.
 final class MiniRecordingView: RecordingWindowView {
     private enum Visual { case sleep, toolbar, active }
 
@@ -19,20 +21,28 @@ final class MiniRecordingView: RecordingWindowView {
     private static let tooltipZone: CGFloat = 38
     private static let sleepSize = CGSize(width: 56, height: 12)
     private static let toolbarSize = CGSize(width: 150, height: 44)
-    private static let activeSize = CGSize(width: 86, height: 30)
+    private static let activeSize = CGSize(width: 120, height: 34)
+    private static let lockedActiveSize = CGSize(width: 138, height: 34)
     private static let buttonSize: CGFloat = 34
     private static let buttonGap: CGFloat = 12
-    private static let waveformSize = CGSize(width: 64, height: 18)
+    /// Clear of the capsule's rounded ends, so bars never touch the curve.
+    private static let waveformSize = CGSize(width: 84, height: 18)
+    private static let messageWidth: CGFloat = 400
+    private static let rewriteTint = NSColor(red: 1, green: 0.8, blue: 0.36, alpha: 1)
     private static let tooltipFont = NSFont.systemFont(ofSize: 13, weight: .medium)
 
     private let capsule = CALayer()
+    /// Clips the waveform to the capsule's shape (the capsule itself can't clip: it casts the shadow).
+    private let clip = CALayer()
     private let hoverPad = CALayer()
     /// Zero-size layers pinned to the capsule's centre: their contents grow from the
     /// middle as the capsule morphs, instead of sliding with its corner.
     private let barRow = CALayer()
     private let buttonRow = CALayer()
     private let waveform: Waveform
-    private let dots = (0..<3).map { _ in CALayer() }
+    private let dots = ProcessingDots(diameter: 4, spacing: 8)
+    private let message = MessageBubble()
+    private var messageVisible = false
     /// Red "live" dot shown while recording hands-free.
     private let lockDot = CALayer()
     private var buttons: [Button] = []
@@ -46,7 +56,7 @@ final class MiniRecordingView: RecordingWindowView {
 
     /// One fixed window size for every state, so morphs are pure layer animation and
     /// the window never resizes under them. Its transparent part lets clicks through.
-    private static let windowSize = NSSize(width: toolbarSize.width + 2 * margin,
+    private static let windowSize = NSSize(width: max(toolbarSize.width, messageWidth) + 2 * margin,
                                            height: toolbarSize.height + 2 * margin + tooltipZone)
 
     init(style: WaveformStyle = .conveyor) {
@@ -61,10 +71,11 @@ final class MiniRecordingView: RecordingWindowView {
         capsule.shadowOffset = CGSize(width: 0, height: -2)
         layer?.addSublayer(capsule)
 
-        for row in [barRow, buttonRow] {
-            row.bounds = .zero
-            capsule.addSublayer(row)
-        }
+        clip.masksToBounds = true
+        capsule.addSublayer(clip)
+        for row in [barRow, buttonRow] { row.bounds = .zero }
+        clip.addSublayer(barRow)
+        capsule.addSublayer(buttonRow)
         barRow.addSublayer(waveform.layer)
         waveform.layout(in: CGRect(x: -Self.waveformSize.width / 2, y: -Self.waveformSize.height / 2,
                                    width: Self.waveformSize.width, height: Self.waveformSize.height))
@@ -73,15 +84,9 @@ final class MiniRecordingView: RecordingWindowView {
         lockDot.backgroundColor = NSColor(red: 1, green: 0.27, blue: 0.23, alpha: 1).cgColor
         lockDot.opacity = 0
         barRow.addSublayer(lockDot)
-        // Processing: three dots pulsing in turn, in place of the waveform.
-        for (index, dot) in dots.enumerated() {
-            dot.bounds = CGRect(x: 0, y: 0, width: 5, height: 5)
-            dot.cornerRadius = 2.5
-            dot.backgroundColor = NSColor.white.cgColor
-            dot.position = CGPoint(x: CGFloat(index - 1) * 10, y: 0)
-            dot.opacity = 0
-            barRow.addSublayer(dot)
-        }
+        // Processing: a glow running along a row of dots, in place of the waveform.
+        dots.layout(in: CGRect(x: -38, y: -4, width: 76, height: 8))
+        barRow.addSublayer(dots.layer)
 
         buttons = [
             Button(tooltip: { [unowned self] in rewriteOn ? "Rewrite on" : "Rewrite off" },
@@ -100,7 +105,7 @@ final class MiniRecordingView: RecordingWindowView {
             button.icon.bounds = CGRect(x: 0, y: 0, width: 18, height: 18)
             button.icon.position = centre
             button.icon.contentsGravity = .resizeAspect
-            button.icon.contents = Self.symbol(symbol)
+            button.icon.contents = Self.symbol(symbol, color: .white)
             buttonRow.addSublayer(button.highlight)
             buttonRow.addSublayer(button.icon)
         }
@@ -116,6 +121,8 @@ final class MiniRecordingView: RecordingWindowView {
         tooltipLabel.contentsScale = 2
         tooltip.addSublayer(tooltipLabel)
         layer?.addSublayer(tooltip)
+        layer?.addSublayer(message.layer)
+        updateRewriteIcon()
 
         apply(.active, animated: false)
     }
@@ -127,8 +134,6 @@ final class MiniRecordingView: RecordingWindowView {
     override var surfaceFrame: CGRect { capsule.frame }
 
     override var preferredSize: NSSize { Self.windowSize }
-
-    private static let lockedActiveSize = CGSize(width: 100, height: 30)
 
     private func size(of visual: Visual) -> CGSize {
         switch visual {
@@ -150,9 +155,12 @@ final class MiniRecordingView: RecordingWindowView {
     override func layoutSurface() {
         capsule.frame = anchoredRect(capsule.bounds.size)
         updateShadowPath(capsule)
+        clip.frame = capsule.bounds
+        clip.cornerRadius = capsule.cornerRadius
         for row in [barRow, buttonRow] { row.position = CGPoint(x: capsule.bounds.midX, y: capsule.bounds.midY) }
         hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
         if hoveredButton != nil { positionTooltip() }
+        if messageVisible { message.layer.position = messagePosition(for: capsule.frame) }
     }
 
     /// Snapped to another edge: glide the shape to that side of the window.
@@ -177,12 +185,16 @@ final class MiniRecordingView: RecordingWindowView {
             spring(capsule, "shadowPath",
                    CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: size.height / 2,
                           cornerHeight: size.height / 2, transform: nil), animated)
+            spring(clip, "bounds", NSValue(rect: CGRect(origin: .zero, size: size)), animated)
+            spring(clip, "position", NSValue(point: centre), animated)
+            spring(clip, "cornerRadius", size.height / 2, animated)
             for row in [barRow, buttonRow] { spring(row, "position", NSValue(point: centre), animated) }
             spring(buttonRow, "transform", CATransform3DMakeScale(next == .toolbar ? 1 : 0.7, next == .toolbar ? 1 : 0.7, 1), animated)
             let locked = next == .active && isLocked && mode == .recording
-            spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 6 : 0, 0, 0), animated)
-            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + 12, y: 0)), animated)
+            spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 8 : 0, 0, 0), animated)
+            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + 15, y: 0)), animated)
             hoverPad.frame = frame.insetBy(dx: -10, dy: -9)
+            if messageVisible { spring(message.layer, "position", NSValue(point: messagePosition(for: frame)), animated) }
         }
 
         // Colours and fades: eased, quick; contents fade in a beat after the shape starts growing.
@@ -211,9 +223,7 @@ final class MiniRecordingView: RecordingWindowView {
         fade(barRow, to: next == .active ? 1 : 0, animated: animated)
         updateLockDot(visible: next == .active && isLocked && mode == .recording)
         fade(buttonRow, to: next == .toolbar ? 1 : 0, animated: animated)
-        for (index, button) in buttons.enumerated() {
-            button.icon.opacity = iconOpacity(index)
-        }
+        if next == .toolbar, messageVisible { hideMessage() }  // the toolbar's tooltips take that spot
         if next != .toolbar {
             hoveredButton = nil
             tooltip.opacity = 0
@@ -271,18 +281,50 @@ final class MiniRecordingView: RecordingWindowView {
             stopAnimations()
             apply(.active, animated: window?.isVisible == true)
         case .processing:
-            apply(.active, animated: false)
-            startWave()
+            apply(.active, animated: window?.isVisible == true)
+            startProcessing()
         }
     }
 
     override func labelsDidChange() {
-        withoutAnimation { buttons[0].icon.opacity = iconOpacity(0) }
+        updateRewriteIcon()
         if hoveredButton != nil { positionTooltip() }
     }
 
-    private func iconOpacity(_ index: Int) -> Float {
-        index == 0 && !rewriteOn ? 0.5 : 1
+    /// ✦ is amber when Rewrite is on, dimmed white when it's off.
+    private func updateRewriteIcon() {
+        withoutAnimation {
+            buttons[0].icon.contents = Self.symbol("sparkle", color: rewriteOn ? Self.rewriteTint : .white)
+            buttons[0].icon.opacity = rewriteOn ? 1 : 0.5
+        }
+    }
+
+    // MARK: Messages
+
+    /// Shows a short message in a bubble on the inner side of the pill (above it when the
+    /// pill sits at the bottom of the screen), whatever the pill is doing.
+    func showMessage(_ text: String, symbol: String?) {
+        let size = message.set(text, symbol: symbol, maximumWidth: Self.messageWidth)
+        let wasVisible = messageVisible
+        messageVisible = true
+        withoutAnimation {
+            message.layer.bounds = CGRect(origin: .zero, size: size)
+            message.layer.position = messagePosition(for: capsule.frame)
+        }
+        if !wasVisible || message.layer.opacity < 1 { message.setVisible(true, rise: anchor.isTop ? -1 : 1) }
+    }
+
+    func hideMessage() {
+        guard messageVisible else { return }
+        messageVisible = false
+        message.setVisible(false, rise: 0)
+    }
+
+    private func messagePosition(for surface: CGRect) -> CGPoint {
+        let size = message.layer.bounds.size
+        let x = min(max(surface.midX, size.width / 2 + 4), bounds.width - size.width / 2 - 4)
+        let y = anchor.isTop ? surface.minY - 8 - size.height / 2 : surface.maxY + 8 + size.height / 2
+        return CGPoint(x: x, y: y)
     }
 
     // MARK: Hover
@@ -425,49 +467,37 @@ final class MiniRecordingView: RecordingWindowView {
         waveform.reset()
     }
 
-    /// Processing: the waveform steps aside for three dots pulsing in turn.
-    private func startWave() {
-        waveform.reset()
-        withoutAnimation { waveform.layer.opacity = 0 }
-        let now = CACurrentMediaTime()
-        for (index, dot) in dots.enumerated() {
-            withoutAnimation { dot.opacity = 0.35 }
-            let pulse = CAKeyframeAnimation(keyPath: "opacity")
-            pulse.values = [0.35, 1, 0.35]
-            pulse.keyTimes = [0, 0.4, 1]
-            pulse.duration = 0.9
-            pulse.repeatCount = .infinity
-            pulse.beginTime = now + Double(index) * 0.15
-            pulse.fillMode = .backwards
-            pulse.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
-            dot.add(pulse, forKey: "pulse")
-            let grow = CAKeyframeAnimation(keyPath: "transform.scale")
-            grow.values = [0.8, 1.15, 0.8]
-            grow.keyTimes = [0, 0.4, 1]
-            grow.duration = 0.9
-            grow.repeatCount = .infinity
-            grow.beginTime = pulse.beginTime
-            grow.fillMode = .backwards
-            grow.preferredFrameRateRange = pulse.preferredFrameRateRange
-            dot.add(grow, forKey: "grow")
+    /// Processing: the waveform hands over to a glow running along a row of dots.
+    private func startProcessing() {
+        let visible = window?.isVisible == true
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(visible ? 0.18 : 0)
+        CATransaction.setDisableActions(!visible)
+        waveform.layer.opacity = 0
+        CATransaction.commit()
+        dots.start()
+        if visible {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.25
+            dots.layer.add(fade, forKey: "fadeIn")
         }
     }
 
     override func stopAnimations() {
+        dots.stop()
         withoutAnimation {
-            for dot in dots {
-                dot.removeAllAnimations()
-                dot.opacity = 0
-            }
+            waveform.reset()
             waveform.layer.opacity = 1
         }
     }
 
-    private static func symbol(_ name: String) -> Any? {
+    private static func symbol(_ name: String, color: NSColor) -> Any? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(
                 NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-                    .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
             )?
             .layerContents(forContentsScale: 2)
     }

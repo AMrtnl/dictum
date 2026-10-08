@@ -1,49 +1,25 @@
 import AppKit
 import QuartzCore
 
-/// A short message in the recording window's spot: "No speech detected", etc.
+/// A short message ("No speech detected") in its own little window, for when the small
+/// window isn't there to show it: the large window and the None style.
 final class ToastView: RecordingWindowView {
+    private static let margin: CGFloat = 12
+    private static let maximumWidth: CGFloat = 420
+    private let bubble = MessageBubble()
+
     override var surfaceFrame: CGRect {
-        bounds.insetBy(dx: Self.margin.left, dy: Self.margin.bottom)
+        bounds.insetBy(dx: Self.margin, dy: Self.margin)
     }
 
-    private static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
-    private static let height: CGFloat = 34
-    private static let margin = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-
     init(_ message: String, symbol: String = "exclamationmark.circle.fill") {
-        let textWidth = min(textSize(message, font: Self.font).width, 420)
-        let capsuleSize = CGSize(width: textWidth + 54, height: Self.height)
-        super.init(
-            size: NSSize(
-                width: capsuleSize.width + Self.margin.left + Self.margin.right,
-                height: capsuleSize.height + Self.margin.top + Self.margin.bottom
-            ),
-            historyLength: 1
-        )
-        let capsule = makeSurface(
-            frame: CGRect(origin: CGPoint(x: Self.margin.left, y: Self.margin.bottom), size: capsuleSize),
-            cornerRadius: Self.height / 2,
-            shadowRadius: 8
-        )
-        capsule.backgroundColor = NSColor.black.cgColor
-        layer?.addSublayer(capsule)
-
-        let icon = CALayer()
-        icon.frame = CGRect(x: 14, y: (Self.height - 15) / 2, width: 15, height: 15)
-        icon.contentsGravity = .resizeAspect
-        icon.contents = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-                    .applying(NSImage.SymbolConfiguration(paletteColors: [.white.withAlphaComponent(0.8)]))
-            )?
-            .layerContents(forContentsScale: 2)
-        capsule.addSublayer(icon)
-
-        let label = makeTextLayer(message, font: Self.font, color: .white.withAlphaComponent(0.9),
-                                  x: 36, midY: Self.height / 2)
-        label.frame.size.width = textWidth
-        label.truncationMode = .end
-        capsule.addSublayer(label)
+        let size = bubble.set(message, symbol: symbol, maximumWidth: Self.maximumWidth)
+        super.init(size: NSSize(width: size.width + 2 * Self.margin, height: size.height + 2 * Self.margin),
+                   historyLength: 1)
+        withoutAnimation {
+            bubble.layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+            bubble.layer.opacity = 1
+        }
+        layer?.addSublayer(bubble.layer)
     }
 }

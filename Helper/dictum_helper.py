@@ -12,6 +12,12 @@ per line:
 Long operations ("install") stream {"event": "progress", ...} lines before the final
 {"ok": ...} line. The helper exits when its stdin closes, i.e. when the app goes away,
 and does no work between requests.
+
+Latency: the app sends "prepare" when a dictation starts (loads / warms the model while
+the user talks) and, during long takes, "partial" every few seconds, which transcribes the
+finished stretches of the WAV that is still being written. On "transcribe" only the last
+stretch is left. The loaded speech model is wired into RAM, so macOS can't swap it out
+between dictations (paging 2.5 GB back in took ~18 s on a Mac under memory pressure).
 """
 
 from __future__ import annotations
@@ -119,8 +125,34 @@ def speech_segments(audio, rate: int = 16000, min_pause: float = 0.8, min_length
     return [(a * frame, min(b * frame, len(audio))) for a, b in kept] or [(0, len(audio))]
 
 
+def read_growing_wav(path: str):
+    """Samples of a 16 kHz mono 16-bit WAV that the app is still writing (its header
+    doesn't have the sizes yet)."""
+    import numpy as np
+
+    with open(path, "rb") as file:
+        file.seek(44)
+        data = file.read()
+    data = data[: len(data) // 2 * 2]
+    return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+
+
 def log(message: str) -> None:
     print(time.strftime("%H:%M:%S"), message, file=sys.stderr, flush=True)
+
+
+def wire(limit: int) -> bool:
+    """Keeps up to `limit` bytes of MLX memory resident (macOS 15+); 0 releases it."""
+    import mlx.core as mx
+
+    try:
+        info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+        mx.set_wired_limit(min(limit, int(info["max_recommended_working_set_size"] * 0.5)))
+        return limit > 0
+    except Exception as error:  # older macOS, or a system wired limit below ours
+        if limit:
+            log(f"could not keep the model resident: {error}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +225,10 @@ class Models:
         self.idle = {"asr": asr_idle, "rewrite": rewrite_idle}
         self.timers: dict[str, threading.Timer] = {}
         self.installing: set[str] = set()
+        self.last_used = 0.0
+        # The take being transcribed ahead while it's recorded: path → work done so far.
+        self.ahead: dict[str, dict] = {}
+        self.finished: list[str] = []  # takes already transcribed; late "partial"s for them are ignored
 
     def touch(self, name: str) -> None:
         """Restart the idle-unload countdown for a model (call with the lock held)."""
@@ -218,6 +254,7 @@ class Models:
                 if self.asr is None:
                     return
                 self.asr, self.asr_name = None, None
+                wire(0)
             else:
                 if self.rewriter is None:
                     return
@@ -271,6 +308,8 @@ class Models:
         import numpy as np
 
         self.asr, self.asr_name = None, None
+        self.ahead.clear()
+        wire(0)
         gc.collect()
         mx.clear_cache()
         started = time.time()
@@ -287,7 +326,90 @@ class Models:
             model.generate(silence, sample_rate=16000)
         mx.clear_cache()
         self.asr, self.asr_name = model, name
-        log(f"speech model {name} ready in {time.time() - started:.1f}s")
+        self.last_used = time.time()
+        # Keep the weights resident: on a Mac short of memory, macOS otherwise swaps an idle
+        # model out and the next dictation waits for it to be paged back in.
+        wired = wire(mx.get_active_memory() + 512 * 2**20)
+        log(f"speech model {name} ready in {time.time() - started:.1f}s"
+            f" ({mx.get_active_memory() / 1e9:.2f} GB{', wired' if wired else ''})")
+
+    def prepare(self, name: str, rewrite: bool) -> None:
+        """A dictation just started: load the models it needs now, while the user talks,
+        and if the speech model sat idle for a while run it once so its memory is paged in
+        before the take ends."""
+        import numpy as np
+
+        name = self.canonical(name)
+        with self.lock:
+            fresh = self.asr is None or self.asr_name != name
+            self.load_speech(name)
+            if not fresh and time.time() - self.last_used > 120:
+                started = time.time()
+                self._run(np.zeros(8000, dtype=np.float32), None, [])
+                log(f"warmed {name} in {time.time() - started:.2f}s")
+            self.last_used = time.time()
+            self.touch("asr")
+            if rewrite and self.installed("rewrite"):
+                self.load_rewriter()
+                self.touch("rewrite")
+
+    def _run(self, audio, language: str | None, vocabulary: list[str]):
+        """One pass of a segmenting model (Qwen3 / Nemotron) over a stretch of audio."""
+        kwargs = {}
+        if self.asr_name == "qwen3":
+            kwargs["language"] = LANGUAGE_NAMES.get(language) if language else None
+            if vocabulary:
+                kwargs["context"] = ", ".join(vocabulary)
+        elif self.asr_name == "cohere":
+            return self.asr.transcribe(audio, sample_rate=16000, language=language or "en")
+        else:
+            kwargs["language"] = LOCALES.get(language, "auto") if language else "auto"
+        return self.asr.generate(audio, sample_rate=16000, **kwargs)
+
+    def _transcribe_segments(self, audio, language: str | None, vocabulary: list[str], work: dict,
+                             keep_last: bool) -> int:
+        """Transcribes the pause-separated stretches of `audio` into `work`. With
+        `keep_last`, the last stretch (still being spoken) is left for later; returns the
+        sample where the untranscribed audio starts."""
+        segments = speech_segments(audio)
+        done = segments[:-1] if keep_last else segments
+        for start, end in done:
+            out = self._run(audio[start:end], language, vocabulary)
+            piece = (out.text or "").strip()
+            if piece:
+                work["texts"].append(piece)
+                detected = language_code(out.language) or language or "en"
+                work["durations"][detected] = work["durations"].get(detected, 0) + (end - start)
+            work["segments"] += 1
+        if keep_last:
+            return segments[-1][0] if len(segments) > 1 else 0
+        return len(audio)
+
+    def partial(self, path: str, name: str, language: str | None, vocabulary: list[str]) -> float:
+        """Transcribes the finished stretches of a take that is still being recorded.
+        Returns the seconds of audio done so far."""
+        import mlx.core as mx
+
+        name = self.canonical(name)
+        if name == "cohere":  # fast enough on a whole take, and it doesn't split takes
+            return 0.0
+        with self.lock:
+            if path in self.finished or not os.path.exists(path):
+                return 0.0
+            self.load_speech(name)
+            work = self.ahead.get(path)
+            if work is None or work["model"] != name:
+                work = {"model": name, "offset": 0, "texts": [], "durations": {}, "segments": 0, "seconds": 0.0}
+                self.ahead = {path: work}  # one take at a time; drops an abandoned one
+            audio = read_growing_wav(path)[work["offset"]:]
+            if len(audio) >= 12 * 16000:  # room for a finished stretch plus the one being spoken
+                started = time.time()
+                work["offset"] += self._transcribe_segments(audio, language, vocabulary, work, keep_last=True)
+                work["seconds"] += time.time() - started
+                mx.clear_cache()
+            self.last_used = time.time()
+            self.touch("asr")
+            return work["offset"] / 16000
 
     def transcribe(self, path: str, name: str, language: str | None, vocabulary: list[str]) -> tuple[str, str]:
         """Returns (text, language code). With `language` None, models that detect the
@@ -297,7 +419,9 @@ class Models:
 
         name = self.canonical(name)
         with self.lock:
+            loaded = self.asr is not None and self.asr_name == name
             self.load_speech(name)
+            started = time.time()
             audio, rate = sf.read(path, dtype="float32", always_2d=False)
             if rate != 16000:
                 raise RuntimeError(f"Expected 16 kHz audio, got {rate} Hz.")
@@ -307,42 +431,46 @@ class Models:
             if name == "cohere":
                 code = language if language in LANGUAGES else "en"
                 text = self.asr.transcribe(audio, sample_rate=16000, language=code).text.strip()
+                note = ""
             else:
-                texts, durations = [], {}
-                for start, end in speech_segments(audio):
-                    kwargs = {}
-                    if name == "qwen3":
-                        kwargs["language"] = LANGUAGE_NAMES.get(language) if language else None
-                        if vocabulary:
-                            kwargs["context"] = ", ".join(vocabulary)
-                    else:
-                        kwargs["language"] = LOCALES.get(language, "auto") if language else "auto"
-                    out = self.asr.generate(audio[start:end], sample_rate=16000, **kwargs)
-                    piece = (out.text or "").strip()
-                    if piece:
-                        texts.append(piece)
-                        detected = language_code(out.language) or language or "en"
-                        durations[detected] = durations.get(detected, 0) + (end - start)
-                text = " ".join(texts)
+                work = self.ahead.pop(path, None)
+                if work is None or work["model"] != name:
+                    work = {"model": name, "offset": 0, "texts": [], "durations": {}, "segments": 0, "seconds": 0.0}
+                ahead = work["segments"]
+                self._transcribe_segments(audio[work["offset"]:], language, vocabulary, work, keep_last=False)
+                text = " ".join(work["texts"])
+                durations = work["durations"]
                 code = max(durations, key=durations.get) if durations else (language or "en")
+                note = f", {work['segments']} stretches ({ahead} done while recording, {work['seconds']:.1f}s)"
             mx.clear_cache()
+            self.finished = [*self.finished[-7:], path]
+            self.last_used = time.time()
             self.touch("asr")
+            log(f"transcribed {len(audio) / 16000:.1f}s with {name} in {time.time() - started:.2f}s"
+                f"{'' if loaded else ' (model was not loaded)'}{note}")
             return text, code
 
     # -- rewrite -------------------------------------------------------------
 
+    def load_rewriter(self) -> None:
+        """Call with the lock held."""
+        if self.rewriter is not None:
+            return
+        if not self.installed("rewrite"):
+            raise RuntimeError("Rewrite model is not installed.")
+        from mlx_lm import load
+
+        started = time.time()
+        self.rewriter = load(str(self.path("rewrite")))
+        log(f"rewrite model loaded in {time.time() - started:.1f}s")
+
     def rewrite(self, text: str) -> tuple[str, bool]:
         import mlx.core as mx
-        from mlx_lm import generate, load
+        from mlx_lm import generate
         from mlx_lm.sample_utils import make_sampler
 
         with self.lock:
-            if self.rewriter is None:
-                if not self.installed("rewrite"):
-                    raise RuntimeError("Rewrite model is not installed.")
-                started = time.time()
-                self.rewriter = load(str(self.path("rewrite")))
-                log(f"rewrite model loaded in {time.time() - started:.1f}s")
+            self.load_rewriter()
             model, tokenizer = self.rewriter
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": rewrite_prompt(text)}],
@@ -423,6 +551,7 @@ class Models:
                 self.rewriter = None
             elif self.asr_name == name:
                 self.asr, self.asr_name = None, None
+                wire(0)
             gc.collect()
             shutil.rmtree(self.path(name), ignore_errors=True)
 
@@ -489,6 +618,13 @@ def handle(models: Models, request: dict, emit) -> dict:
         text, language = models.transcribe(request["path"], request.get("model", "cohere"),
                                            request.get("language"), request.get("vocabulary") or [])
         return {"ok": True, "text": text, "language": language, "seconds": round(time.time() - started, 3)}
+    if op == "prepare":  # a dictation started
+        models.prepare(request["model"], bool(request.get("rewrite")))
+        return {"ok": True}
+    if op == "partial":  # a long take is still being recorded
+        done = models.partial(request["path"], request["model"], request.get("language"),
+                              request.get("vocabulary") or [])
+        return {"ok": True, "seconds": done}
     if op == "select":  # preload a speech model so the next dictation doesn't wait for it
         with models.lock:
             models.load_speech(models.canonical(request["model"]))

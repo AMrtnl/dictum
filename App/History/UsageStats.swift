@@ -51,7 +51,7 @@ struct UsageStats {
             spokenSeconds += entry.duration
         }
         wordsPerMinute = spokenSeconds > 0 ? Int((Double(timedWords) / (spokenSeconds / 60)).rounded()) : 0
-        appsUsed = Set(done.compactMap(\.app)).count
+        appsUsed = Set(done.compactMap(\.app).filter { !Self.isSystemProcess($0) }).count
         minutesSaved = max(0, Double(words) / Self.typingWPM - spokenSeconds / 60)
     }
 
@@ -76,11 +76,16 @@ struct UsageStats {
         return counts.map { ($0.key, Double($0.value) / Double(done.count)) }.sorted { $0.share > $1.share }
     }
 
+    /// Frontmost "apps" that aren't somewhere anyone dictates into (lock screen, Dictum itself).
+    static func isSystemProcess(_ app: String) -> Bool {
+        ["loginwindow", "Dictum", "ScreenSaverEngine", "UserNotificationCenter", "Dock"].contains(app)
+    }
+
     /// Apps dictated into most, with their bundle IDs for icons.
     static func topApps(_ entries: [HistoryEntry], limit: Int = 4) -> [(name: String, bundleID: String?, count: Int)] {
         var counts: [String: (bundleID: String?, count: Int)] = [:]
         for entry in entries where entry.status == .done {
-            guard let app = entry.app else { continue }
+            guard let app = entry.app, !Self.isSystemProcess(app) else { continue }
             let current = counts[app] ?? (entry.appBundleID, 0)
             counts[app] = (current.bundleID ?? entry.appBundleID, current.count + 1)
         }

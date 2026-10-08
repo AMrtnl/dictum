@@ -100,6 +100,24 @@ final class SpeechEngine {
         return (reply.text ?? "", reply.language)
     }
 
+    /// A dictation started: the helper loads what it will need — or pages it back in after
+    /// a long idle — while the user is talking rather than after they stop.
+    func prepare(rewrite: Bool) {
+        guard isReady else { return }
+        var request = HelperRequest(op: "prepare", model: AppSettings.shared.speechModel.rawValue)
+        request.rewrite = rewrite && rewriteModel == .installed ? true : nil
+        Task { _ = try? await self.request(request, timeout: 120) }
+    }
+
+    /// Transcribes the finished stretches of a take that is still being recorded, so that
+    /// stopping a long dictation only waits for its last stretch.
+    func transcribeAhead(_ take: URL, language: SpeechLanguage?, vocabulary: [String]) async {
+        var request = HelperRequest(op: "partial", path: take.path, language: language?.rawValue,
+                                    model: AppSettings.shared.speechModel.rawValue)
+        request.vocabulary = vocabulary.isEmpty ? nil : vocabulary
+        _ = try? await self.request(request, timeout: 120)
+    }
+
     /// Downloads another speech model (shown in the Models library).
     func installSpeechModel(_ model: SpeechModel) async {
         speechModelError = nil

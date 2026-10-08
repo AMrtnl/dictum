@@ -79,15 +79,22 @@ final class RecordingPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func show() {
+    /// - Parameter rect: for toasts, the screen rect to centre on (where the large window is).
+    func show(centredOn rect: NSRect? = nil) {
         visibilityGeneration += 1
-        if !isVisible {
+        if let rect {
+            setFrameOrigin(NSPoint(x: rect.midX - frame.width / 2, y: rect.midY - frame.height / 2))
+            if !isVisible { alphaValue = 0 }
+        } else if !isVisible {
             if isAnchored {
                 setFrame(anchoredFrame(size: content.preferredSize, on: screenUnderMouse()), display: false)
             } else {
                 moveToRememberedOrDefaultPosition()
             }
             alphaValue = 0
+        } else if content.snapsToAnchors, let target = screenUnderMouse(), target != screen {
+            // Always shown: follow the pointer to the screen being worked on.
+            setFrame(anchoredFrame(size: content.preferredSize, on: target), display: true)
         }
         orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in

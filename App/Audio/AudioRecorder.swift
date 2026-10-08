@@ -66,6 +66,9 @@ final class AudioRecorder {
         self.sink = sink
     }
 
+    /// The WAV being written while recording (its header gets the sizes on `stop()`).
+    var recordingURL: URL? { sink?.url }
+
     /// Stops recording and finalises the WAV file.
     func stop() -> Take? {
         guard let sink else { return nil }

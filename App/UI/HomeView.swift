@@ -8,6 +8,8 @@ struct HomeView: View {
     @State private var period = UsageStats.Period.allTime
 
     private static let changes: [(date: String, title: String, detail: String)] = [
+        ("Oct 8", "Faster after you stop talking",
+         "The speech model stays in memory, warms up as you start talking, and long dictations are transcribed while you speak. Redesigned recording windows and messages."),
         ("Oct 7", "Hands-free, auto language, more models",
          "Tap the shortcut to dictate hands-free, automatic English/French detection, training data, seven waveform styles and a new icon."),
         ("Oct 7", "Home window and Vocabulary",
@@ -161,11 +163,8 @@ struct HomeView: View {
                         Text("Top apps").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
                         ForEach(apps, id: \.name) { app in
                             HStack(spacing: 8) {
-                                if let icon = AppIcons.icon(for: app.bundleID) {
-                                    Image(nsImage: icon).resizable().frame(width: 18, height: 18)
-                                } else {
-                                    Image(systemName: "app.dashed").frame(width: 18, height: 18).foregroundStyle(.secondary)
-                                }
+                                Image(nsImage: AppIcons.icon(for: app.bundleID, name: app.name))
+                                    .resizable().frame(width: 18, height: 18)
                                 Text(app.name).font(.system(size: 12)).lineLimit(1)
                                 Spacer()
                                 Text("\(app.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
