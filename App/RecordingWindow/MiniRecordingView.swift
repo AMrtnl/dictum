@@ -21,16 +21,16 @@ final class MiniRecordingView: RecordingWindowView {
     private static let tooltipZone: CGFloat = 38
     private static let sleepSize = CGSize(width: 56, height: 12)
     private static let toolbarSize = CGSize(width: 2 * toolbarInset + 3 * highlightSize.width + 2 * toolbarInset,
-                                            height: 44)
-    private static let activeSize = CGSize(width: 120, height: 34)
-    private static let lockedActiveSize = CGSize(width: 138, height: 34)
+                                            height: 36)
+    private static let activeSize = CGSize(width: 116, height: 28)
+    private static let lockedActiveSize = CGSize(width: 132, height: 28)
     /// One inset everywhere in the toolbar: from the capsule's edge to a hover highlight and
     /// between highlights. The highlights are pills as tall as the capsule minus that inset, so
     /// the end ones sit concentric with the capsule's rounded ends.
     private static let toolbarInset: CGFloat = 4
-    private static let highlightSize = CGSize(width: 44, height: 44 - 2 * toolbarInset)
+    private static let highlightSize = CGSize(width: 40, height: 36 - 2 * toolbarInset)
     /// Clear of the capsule's rounded ends, so bars never touch the curve.
-    private static let waveformSize = CGSize(width: 84, height: 18)
+    private static let waveformSize = CGSize(width: 82, height: 15)
     private static let messageWidth: CGFloat = 400
     private static let rewriteTint = NSColor(red: 1, green: 0.8, blue: 0.36, alpha: 1)
     private static let tooltipFont = NSFont.systemFont(ofSize: 13, weight: .medium)
@@ -106,7 +106,7 @@ final class MiniRecordingView: RecordingWindowView {
             button.highlight.cornerRadius = Self.highlightSize.height / 2
             button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.17).cgColor
             button.highlight.opacity = 0
-            button.icon.bounds = CGRect(x: 0, y: 0, width: 18, height: 18)
+            button.icon.bounds = CGRect(x: 0, y: 0, width: 15, height: 15)
             button.icon.position = centre
             button.icon.contentsGravity = .resizeAspect
             button.icon.contents = Self.symbol(symbol, color: .white)
@@ -502,7 +502,7 @@ final class MiniRecordingView: RecordingWindowView {
     private static func symbol(_ name: String, color: NSColor) -> Any? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+                NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
                     .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
             )?
             .layerContents(forContentsScale: 2)
