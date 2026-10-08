@@ -20,11 +20,15 @@ final class MiniRecordingView: RecordingWindowView {
     private static let margin: CGFloat = 12
     private static let tooltipZone: CGFloat = 38
     private static let sleepSize = CGSize(width: 56, height: 12)
-    private static let toolbarSize = CGSize(width: 150, height: 44)
+    private static let toolbarSize = CGSize(width: 2 * toolbarInset + 3 * highlightSize.width + 2 * toolbarInset,
+                                            height: 44)
     private static let activeSize = CGSize(width: 120, height: 34)
     private static let lockedActiveSize = CGSize(width: 138, height: 34)
-    private static let buttonSize: CGFloat = 34
-    private static let buttonGap: CGFloat = 12
+    /// One inset everywhere in the toolbar: from the capsule's edge to a hover highlight and
+    /// between highlights. The highlights are pills as tall as the capsule minus that inset, so
+    /// the end ones sit concentric with the capsule's rounded ends.
+    private static let toolbarInset: CGFloat = 4
+    private static let highlightSize = CGSize(width: 44, height: 44 - 2 * toolbarInset)
     /// Clear of the capsule's rounded ends, so bars never touch the curve.
     private static let waveformSize = CGSize(width: 84, height: 18)
     private static let messageWidth: CGFloat = 400
@@ -96,11 +100,11 @@ final class MiniRecordingView: RecordingWindowView {
         ]
         let symbols = ["sparkle", "waveform", "arrow.up.left.and.arrow.down.right"]
         for (index, (button, symbol)) in zip(buttons, symbols).enumerated() {
-            let centre = CGPoint(x: CGFloat(index - 1) * (Self.buttonSize + Self.buttonGap), y: 0)
-            button.highlight.bounds = CGRect(x: 0, y: 0, width: Self.buttonSize, height: Self.buttonSize)
+            let centre = CGPoint(x: CGFloat(index - 1) * (Self.highlightSize.width + Self.toolbarInset), y: 0)
+            button.highlight.bounds = CGRect(origin: .zero, size: Self.highlightSize)
             button.highlight.position = centre
-            button.highlight.cornerRadius = Self.buttonSize / 2
-            button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
+            button.highlight.cornerRadius = Self.highlightSize.height / 2
+            button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.17).cgColor
             button.highlight.opacity = 0
             button.icon.bounds = CGRect(x: 0, y: 0, width: 18, height: 18)
             button.icon.position = centre
@@ -192,7 +196,7 @@ final class MiniRecordingView: RecordingWindowView {
             spring(buttonRow, "transform", CATransform3DMakeScale(next == .toolbar ? 1 : 0.7, next == .toolbar ? 1 : 0.7, 1), animated)
             let locked = next == .active && isLocked && mode == .recording
             spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 8 : 0, 0, 0), animated)
-            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + 15, y: 0)), animated)
+            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + size.height / 2, y: 0)), animated)  // concentric with the end
             hoverPad.frame = frame.insetBy(dx: -10, dy: -9)
             if messageVisible { spring(message.layer, "position", NSValue(point: messagePosition(for: frame)), animated) }
         }
@@ -379,7 +383,9 @@ final class MiniRecordingView: RecordingWindowView {
 
     private func buttonIndex(at point: NSPoint) -> Int? {
         buttons.firstIndex { button in
-            buttonRow.convert(button.highlight.frame, to: layer).insetBy(dx: -4, dy: -4).contains(point)
+            // Half the gap on each side, so neighbouring buttons' targets meet without overlapping.
+            buttonRow.convert(button.highlight.frame, to: layer)
+                .insetBy(dx: -Self.toolbarInset / 2, dy: -Self.toolbarInset).contains(point)
         }
     }
 
