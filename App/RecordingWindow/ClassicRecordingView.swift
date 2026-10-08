@@ -15,8 +15,6 @@ final class ClassicRecordingView: RecordingWindowView {
     private static let live = NSColor(red: 1, green: 0.27, blue: 0.23, alpha: 1)
     private static let collapseSize: CGFloat = 22
     private static let hintGap: CGFloat = 18
-    /// The card at rest ("Always show"): see-through until a dictation starts.
-    private static let restingOpacity: Float = 0.62
 
     private let card: CALayer
     private let footer = CALayer()
@@ -195,7 +193,6 @@ final class ClassicRecordingView: RecordingWindowView {
         CATransaction.begin()
         CATransaction.setAnimationDuration(animated ? 0.18 : 0)
         CATransaction.setDisableActions(!animated)
-        card.opacity = mode == .idle ? Self.restingOpacity : 1
         micIcon.opacity = processing || live ? 0 : 1
         spinner.opacity = processing ? 1 : 0
         startHint.opacity = mode == .idle ? 1 : 0

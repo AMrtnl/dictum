@@ -402,7 +402,7 @@ final class MessageBubble {
     private let icon = CALayer()
     private let label = CATextLayer()
     private static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
-    static let height: CGFloat = 28
+    static let height: CGFloat = 30
 
     init() {
         layer.cornerRadius = Self.height / 2

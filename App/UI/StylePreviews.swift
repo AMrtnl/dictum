@@ -83,9 +83,9 @@ final class PreviewClock {
 /// A waveform style moving inside a pill drawn exactly like the small recording window's
 /// (same layers and sizes), shown a little larger.
 final class WaveformPreviewView: NSView {
-    private static let pillSize = CGSize(width: 120, height: 28)
-    private static let waveformSize = CGSize(width: 84, height: 15)
-    private static let scale: CGFloat = 1.45
+    private static let pillSize = CGSize(width: 142, height: 36)
+    private static let waveformSize = CGSize(width: 100, height: 18)
+    private static let scale: CGFloat = 1.1
 
     private let pill = CALayer()
     private let clip = CALayer()

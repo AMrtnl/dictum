@@ -24,15 +24,15 @@ final class MiniRecordingView: RecordingWindowView {
     /// differ in what they show.
     private static let toolbarSize = activeSize
     private static let activeSize = CGSize(width: 2 * toolbarInset + 3 * highlightSize.width + 2 * toolbarInset,
-                                           height: 28)
-    private static let lockedActiveSize = CGSize(width: activeSize.width + 16, height: activeSize.height)
+                                           height: 36)
+    private static let lockedActiveSize = CGSize(width: activeSize.width + 18, height: activeSize.height)
     /// One inset everywhere in the toolbar: from the capsule's edge to a hover highlight and
     /// between highlights. The highlights are pills as tall as the capsule minus that inset, so
     /// the end ones sit concentric with the capsule's rounded ends.
-    private static let toolbarInset: CGFloat = 3
-    private static let highlightSize = CGSize(width: 36, height: 28 - 2 * toolbarInset)
+    private static let toolbarInset: CGFloat = 4
+    private static let highlightSize = CGSize(width: 42, height: 36 - 2 * toolbarInset)
     /// Clear of the capsule's rounded ends, so bars never touch the curve.
-    private static let waveformSize = CGSize(width: 84, height: 15)
+    private static let waveformSize = CGSize(width: 100, height: 18)
     private static let messageWidth: CGFloat = 400
     private static let rewriteTint = NSColor(red: 1, green: 0.8, blue: 0.36, alpha: 1)
     private static let tooltipFont = NSFont.systemFont(ofSize: 13, weight: .medium)
@@ -91,7 +91,7 @@ final class MiniRecordingView: RecordingWindowView {
         lockDot.opacity = 0
         barRow.addSublayer(lockDot)
         // Processing: a glow running along a row of dots, in place of the waveform.
-        dots.layout(in: CGRect(x: -38, y: -4, width: 76, height: 8))
+        dots.layout(in: CGRect(x: -44, y: -4, width: 88, height: 8))
         barRow.addSublayer(dots.layer)
 
         buttons = [
@@ -108,7 +108,7 @@ final class MiniRecordingView: RecordingWindowView {
             button.highlight.cornerRadius = Self.highlightSize.height / 2
             button.highlight.backgroundColor = NSColor.white.withAlphaComponent(0.17).cgColor
             button.highlight.opacity = 0
-            button.icon.bounds = CGRect(x: 0, y: 0, width: 13, height: 13)
+            button.icon.bounds = CGRect(x: 0, y: 0, width: 16, height: 16)
             button.icon.position = centre
             button.icon.contentsGravity = .resizeAspect
             button.icon.contents = Self.symbol(symbol, color: .white)
@@ -504,7 +504,7 @@ final class MiniRecordingView: RecordingWindowView {
     private static func symbol(_ name: String, color: NSColor) -> Any? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
+                NSImage.SymbolConfiguration(pointSize: 13.5, weight: .semibold)
                     .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
             )?
             .layerContents(forContentsScale: 2)
