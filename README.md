@@ -20,10 +20,10 @@ On-device dictation for Apple Silicon Macs: Qwen3-ASR or Cohere Transcribe for s
 - **Rewrite mode.** Hold ⌥⇧Space, or make Rewrite the default, and Tiny Aya removes fillers, false starts and self-corrections. If its rewrite drifts from what you said, Dictum pastes your plain transcript instead.
 - **Vocabulary:** teach Dictum names and terms. Qwen3 uses them as hints, and every transcript is corrected with them.
 - **Recording window**, fully opaque while recording:
-  - **Small window:** sleeps as a thin pill. Hover it for ✦ Rewrite, Home and ⤢ Expand. Drag it to snap to a screen edge or corner. Messages ("No speech detected") appear in a bubble beside it.
+  - **Small window:** sleeps as a thin pill. Hover it for ✦ Rewrite, Home and ⤢ Expand, in a toolbar the same size as the recording pill. Drag it to snap to a screen edge or corner. Messages ("No speech detected") appear in a bubble beside it.
   - **Large window:** moves freely and resizes from its edges. Its key hints follow what you can do: Start, Stop or Cancel.
   - While transcribing, a glow runs along a row of dots. Hands-free dictation shows a red live dot.
-- **Seven waveform styles:** Conveyor (default), Ripple, Wave, Equalizer, Ribbon, Aurora and Dot Matrix.
+- **Seven waveform styles:** Conveyor (default), Ripple, Wave, Equalizer, Ribbon, Aurora and Dot Matrix. Configuration shows each one moving, pictures of the window styles, and **Preview on Screen** to see the window where it will appear (the microphone stays off).
 - **Home window:**
   - Words per minute, words, apps used, time saved, an activity chart, languages and top apps.
   - Pages for Modes, Vocabulary, Configuration, Sound, the Models library, History and Training data.

@@ -23,13 +23,22 @@ struct ConfigurationPage: View {
             }
 
             Section("Recording window") {
-                RecordingStylePicker(selection: $settings.recordingWindowStyle)
+                RecordingStylePicker(selection: $settings.recordingWindowStyle, waveform: settings.waveformStyle)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
-                Picker("Waveform", selection: $settings.waveformStyle) {
-                    ForEach(WaveformStyle.allCases) { Text($0.title).tag($0) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(settings.recordingWindowStyle.summary).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Preview on Screen") { DictationController.shared.previewRecordingWindow() }
+                        .disabled(settings.recordingWindowStyle == .none)
+                        .help("Shows the recording window where it will appear, with made-up sound — the microphone stays off.")
                 }
-                Text(settings.waveformStyle.summary).font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Waveform")
+                    WaveformStylePicker(selection: $settings.waveformStyle)
+                }
+                .padding(.vertical, 4)
                 Toggle("Always show", isOn: $settings.alwaysShowIndicator)
                     .disabled(settings.recordingWindowStyle == .none)
                 Text("Keeps the small window on screen between dictations, asleep as a thin pill; hover it for Rewrite, Home and Expand. It does no work while idle.")

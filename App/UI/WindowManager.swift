@@ -96,7 +96,7 @@ extension WindowManager {
             ("home", AnyView(HomeView().frame(width: 700, height: 640))),
             ("modes", AnyView(ModesPage().frame(width: 700, height: 360))),
             ("vocabulary", AnyView(VocabularyView().frame(width: 700, height: 420))),
-            ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 1400))),
+            ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 2000))),
             ("sound", AnyView(SoundPage().frame(width: 700, height: 300))),
             ("models", AnyView(ModelSettings().frame(width: 700, height: 640))),
             ("history", AnyView(HistoryPage().frame(width: 700, height: 420))),

@@ -19,6 +19,14 @@ enum RecordingWindowStyle: String, CaseIterable, Identifiable {
         case .none: "None"
         }
     }
+
+    var summary: String {
+        switch self {
+        case .classic: "A large card with the waveform and key hints. Move it anywhere and resize it from its edges; ↘↖ switches to Mini."
+        case .mini: "A small pill that snaps to a screen edge or corner. At rest it sleeps as a thin line; hover it for Rewrite, Home and Expand."
+        case .none: "No window. The start and stop sounds tell you when Dictum is listening."
+        }
+    }
 }
 
 /// Base for the recording window styles. Everything is drawn with Core Animation

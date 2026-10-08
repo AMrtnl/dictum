@@ -36,6 +36,7 @@ final class DictationController {
     @ObservationIgnored private var isLocked = false
     @ObservationIgnored private var processingTask: Task<Void, Never>?
     @ObservationIgnored private var aheadTask: Task<Void, Never>?
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var cancelListeners: [Task<Void, Never>] = []
     @ObservationIgnored private var lastText: String?
     @ObservationIgnored private var askedForAccessibility = false
@@ -83,6 +84,7 @@ final class DictationController {
         }
         guard state == .idle else { return }
         guard canDictate() else { return }
+        previewTask?.cancel()
 
         activeShortcut = shortcut
         activeMode = shortcut == .pushToTalkRewrite ? .rewrite : settings.mode
@@ -468,6 +470,32 @@ final class DictationController {
             panel = view.map { RecordingPanel(content: $0, positionKey: config.style.rawValue) }
         }
         return panel
+    }
+
+    /// Settings' "Preview on Screen": the chosen window where it will appear, ~3 s of made-up
+    /// sound then a moment of transcribing. The microphone stays off.
+    func previewRecordingWindow() {
+        guard state == .idle, let panel = currentPanel() else { return }
+        previewTask?.cancel()
+        hideToast()
+        panel.content.modeTitle = settings.mode.title
+        panel.content.resetLevels()
+        panel.content.mode = .recording
+        panel.show()
+        previewTask = Task { [weak self] in
+            var speech = SyntheticSpeech(seed: .random(in: 1...10_000))
+            for _ in 0..<95 {
+                guard !Task.isCancelled, self?.state == .idle else { return }
+                panel.content.push(level: speech.next())
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+            guard !Task.isCancelled, self?.state == .idle else { return }
+            panel.content.processingLabel = "Transcribing…"
+            panel.content.mode = .processing
+            try? await Task.sleep(for: .seconds(1.3))
+            guard !Task.isCancelled, let self, state == .idle else { return }
+            finish()
+        }
     }
 
     /// The collapse / expand control: Classic ↔ Mini.
