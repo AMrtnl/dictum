@@ -164,7 +164,7 @@ final class MiniRecordingView: RecordingWindowView {
         clip.frame = capsule.bounds
         clip.cornerRadius = capsule.cornerRadius
         for row in [barRow, buttonRow] { row.position = CGPoint(x: capsule.bounds.midX, y: capsule.bounds.midY) }
-        hoverPad.frame = capsule.frame.insetBy(dx: -10, dy: -9)
+        hoverPad.frame = capsule.frame.insetBy(dx: -4, dy: -6)
         if hoveredButton != nil { positionTooltip() }
         if messageVisible { message.layer.position = messagePosition(for: capsule.frame) }
     }
@@ -199,7 +199,7 @@ final class MiniRecordingView: RecordingWindowView {
             let locked = next == .active && isLocked && mode == .recording
             spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 8 : 0, 0, 0), animated)
             spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + size.height / 2, y: 0)), animated)  // concentric with the end
-            hoverPad.frame = frame.insetBy(dx: -10, dy: -9)
+            hoverPad.frame = frame.insetBy(dx: -4, dy: -6)
             if messageVisible { spring(message.layer, "position", NSValue(point: messagePosition(for: frame)), animated) }
         }
 
@@ -335,9 +335,13 @@ final class MiniRecordingView: RecordingWindowView {
 
     // MARK: Hover
 
+    /// Just the pill and a few points around it (a little more above and below the thin
+    /// sleeping one), so passing nearby or clicking next to it never opens the toolbar.
     private var hoverRect: CGRect {
-        visual == .sleep ? capsule.frame.insetBy(dx: -10, dy: -9) : capsule.frame.insetBy(dx: -6, dy: -6)
+        visual == .sleep ? capsule.frame.insetBy(dx: -4, dy: -6) : capsule.frame.insetBy(dx: -4, dy: -4)
     }
+
+    override var interactiveFrame: CGRect { hoverRect }
 
     override func hoverChanged(at point: NSPoint?) {
         guard mode == .idle else { return }
@@ -351,7 +355,8 @@ final class MiniRecordingView: RecordingWindowView {
                     apply(.toolbar, animated: true)
                 }
                 expandWork = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+                // A short dwell: crossing the pill on the way somewhere else doesn't open it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
             }
             setHoveredButton(visual == .toolbar ? buttonIndex(at: point) : nil)
         } else {

@@ -35,6 +35,7 @@ final class RecordingPanel: NSPanel {
     private let frameKey: String?
     private let style: String?
     private var shrinkWork: DispatchWorkItem?
+    private var pointerMonitors: [Any] = []
 
     /// - Parameters:
     ///   - positionKey: the style name; enables dragging and remembers the position.
@@ -55,7 +56,8 @@ final class RecordingPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        ignoresMouseEvents = positionKey == nil
+        // Click-through until the pointer is over the visible window (see followPointer()).
+        ignoresMouseEvents = true
         acceptsMouseMovedEvents = positionKey != nil
         // NSApp.hide() (after closing Settings) must not take the indicator with it.
         canHide = false
@@ -101,6 +103,7 @@ final class RecordingPanel: NSPanel {
             context.duration = 0.12
             animator().alphaValue = 1
         }
+        watchPointer(true)
     }
 
     func hide() {
@@ -114,6 +117,7 @@ final class RecordingPanel: NSPanel {
                 // A show() during the fade-out wins.
                 guard let self, self.visibilityGeneration == generation else { return }
                 self.orderOut(nil)
+                self.watchPointer(false)
                 self.content.stopAnimations()
             }
         }
@@ -152,12 +156,53 @@ final class RecordingPanel: NSPanel {
             setFrame(target, display: true)
             if next.type == .leftMouseUp { break }
         }
+        defer { followPointer() }
         guard frame != startFrame else { return }
         if content.snapsToAnchors && edges.isEmpty {
             snapToNearestAnchor()
         } else {
             rememberFrame()
         }
+    }
+
+    // MARK: - Click-through
+
+    /// While shown, follows the pointer so the window takes the mouse only over its visible
+    /// part. Mouse-moved monitors cost nothing while the mouse is still and need no permission.
+    private func watchPointer(_ on: Bool) {
+        guard frameKey != nil else { return }  // toasts never take the mouse
+        if on, pointerMonitors.isEmpty {
+            if let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged], handler: { [weak self] _ in
+                MainActor.assumeIsolated { self?.followPointer() }
+            }) {
+                pointerMonitors.append(global)
+            } else {
+                ignoresMouseEvents = false  // can't follow the pointer: stay usable rather than click-through
+                return
+            }
+            if let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved], handler: { [weak self] event in
+                MainActor.assumeIsolated { self?.followPointer() }
+                return event
+            }) {
+                pointerMonitors.append(local)
+            }
+            followPointer()
+        } else if !on {
+            pointerMonitors.forEach(NSEvent.removeMonitor)
+            pointerMonitors = []
+            ignoresMouseEvents = true
+        }
+    }
+
+    /// Takes the mouse while the pointer is over the visible window; otherwise lets clicks
+    /// and hovers through to whatever is underneath.
+    private func followPointer() {
+        let point = NSEvent.mouseLocation
+        let inside = isVisible && content.interactiveFrame.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
+        guard ignoresMouseEvents == inside else { return }
+        ignoresMouseEvents = !inside
+        let local = content.convert(convertPoint(fromScreen: point), from: nil)
+        content.hoverChanged(at: inside ? local : nil)
     }
 
     // MARK: - Anchoring

@@ -122,6 +122,9 @@ class RecordingWindowView: NSView {
     var surfaceFrame: CGRect { bounds }
     /// Whether dragging the surface's edges resizes the window.
     var isResizable: Bool { false }
+    /// The only part of the window that takes the mouse; clicks anywhere else in the
+    /// (mostly transparent) window go to the app underneath. The surface, plus the resize band.
+    var interactiveFrame: CGRect { surfaceFrame.insetBy(dx: isResizable ? -5 : -2, dy: isResizable ? -5 : -2) }
     var minimumSurfaceSize: CGSize { surfaceFrame.size }
     var maximumSurfaceSize: CGSize { surfaceFrame.size }
 
