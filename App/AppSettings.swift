@@ -163,6 +163,10 @@ final class AppSettings {
     }
     var alwaysShowIndicator: Bool { didSet { store(alwaysShowIndicator, "alwaysShowIndicator") } }
     var waveformStyle: WaveformStyle { didSet { store(waveformStyle.rawValue, "waveformStyle") } }
+    /// Shows what is being said in the recording window while dictating.
+    var liveTranscript: Bool { didSet { store(liveTranscript, "liveTranscript") } }
+    /// The menu bar icon becomes a live waveform while dictating.
+    var animateMenuBar: Bool { didSet { store(animateMenuBar, "animateMenuBar") } }
     /// Core Audio device UID; nil follows the system default input.
     var microphoneUID: String? { didSet { store(microphoneUID, "microphoneUID") } }
     var playSounds: Bool { didSet { store(playSounds, "playSounds") } }
@@ -188,6 +192,8 @@ final class AppSettings {
         recordingWindowStyle = .current
         alwaysShowIndicator = d.object(forKey: "alwaysShowIndicator") as? Bool ?? true
         waveformStyle = d.string(forKey: "waveformStyle").flatMap(WaveformStyle.init) ?? .conveyor
+        liveTranscript = d.bool(forKey: "liveTranscript")
+        animateMenuBar = d.object(forKey: "animateMenuBar") as? Bool ?? true
         microphoneUID = d.string(forKey: "microphoneUID")
         playSounds = d.object(forKey: "playSounds") as? Bool ?? true
         keepInClipboard = d.bool(forKey: "keepInClipboard")

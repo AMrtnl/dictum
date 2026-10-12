@@ -118,6 +118,16 @@ final class SpeechEngine {
         _ = try? await self.request(request, timeout: 120)
     }
 
+    /// The live transcript of a take that is still being recorded: the finished stretches
+    /// (kept for the final transcription) and a preview of the one still being spoken.
+    func live(_ take: URL, language: SpeechLanguage?, vocabulary: [String]) async -> (committed: String, tail: String)? {
+        var request = HelperRequest(op: "live", path: take.path, language: language?.rawValue,
+                                    model: AppSettings.shared.speechModel.rawValue)
+        request.vocabulary = vocabulary.isEmpty ? nil : vocabulary
+        guard let reply = try? await self.request(request, timeout: 60) else { return nil }
+        return (reply.text ?? "", reply.tail ?? "")
+    }
+
     /// Downloads another speech model (shown in the Models library).
     func installSpeechModel(_ model: SpeechModel) async {
         speechModelError = nil

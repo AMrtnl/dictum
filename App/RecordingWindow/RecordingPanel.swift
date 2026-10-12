@@ -36,6 +36,8 @@ final class RecordingPanel: NSPanel {
     private let style: String?
     private var shrinkWork: DispatchWorkItem?
     private var pointerMonitors: [Any] = []
+    /// While a snapping window is dragged: the spots it can snap to.
+    private var guides: AnchorGuides?
 
     /// - Parameters:
     ///   - positionKey: the style name; enables dragging and remembers the position.
@@ -126,13 +128,27 @@ final class RecordingPanel: NSPanel {
     // MARK: - Moving and resizing
 
     /// Follows the mouse until it is released: moves the panel, or resizes it from `edges`.
-    func track(_ event: NSEvent, resizing edges: Edges, minimum: NSSize, maximum: NSSize) {
+    /// A move starts only once the pointer has travelled a few points, so a click stays a
+    /// click. Returns whether the panel moved or resized.
+    @discardableResult
+    func track(_ event: NSEvent, resizing edges: Edges, minimum: NSSize, maximum: NSSize) -> Bool {
         let start = NSEvent.mouseLocation
         let startFrame = frame
+        var dragging = !edges.isEmpty
+        defer {
+            guides?.close()
+            guides = nil
+        }
         while let next = nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             let now = NSEvent.mouseLocation
             let dx = now.x - start.x
             let dy = now.y - start.y
+            if !dragging {
+                if next.type == .leftMouseUp { break }
+                guard hypot(dx, dy) >= 3 else { continue }
+                dragging = true
+                if content.snapsToAnchors { showGuides() }
+            }
             var target = startFrame
             if edges.isEmpty {
                 target.origin.x += dx
@@ -154,15 +170,25 @@ final class RecordingPanel: NSPanel {
                 }
             }
             setFrame(target, display: true)
+            if let guides, let (anchor, screen) = nearestAnchor() { guides.highlight(anchor, on: screen) }
             if next.type == .leftMouseUp { break }
         }
         defer { followPointer() }
-        guard frame != startFrame else { return }
+        guard frame != startFrame else { return false }
         if content.snapsToAnchors && edges.isEmpty {
             snapToNearestAnchor()
         } else {
             rememberFrame()
         }
+        return true
+    }
+
+    /// Ghost pills at every spot the window can snap to, on each screen, behind the window.
+    private func showGuides() {
+        let guides = AnchorGuides(surface: content.surfaceFrame.size, inset: Self.snapInset, cornerRadius: content.surfaceCornerRadius)
+        guides.show(below: self)
+        self.guides = guides
+        if let (anchor, screen) = nearestAnchor() { guides.highlight(anchor, on: screen) }
     }
 
     // MARK: - Click-through
@@ -208,11 +234,12 @@ final class RecordingPanel: NSPanel {
     // MARK: - Anchoring
 
     /// Thirds of the screen pick left / centre / right; halves pick top / bottom.
-    private func snapToNearestAnchor() {
+    private func nearestAnchor() -> (Anchor, NSScreen)? {
         let surface = content.surfaceFrame.offsetBy(dx: frame.minX, dy: frame.minY)
         let centre = NSPoint(x: surface.midX, y: surface.midY)
-        let screen = NSScreen.screens.first { $0.frame.contains(centre) } ?? self.screen ?? NSScreen.main
-        guard let area = screen?.visibleFrame else { return }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(centre) }) ?? self.screen ?? NSScreen.main
+        else { return nil }
+        let area = screen.visibleFrame
         let top = centre.y > area.midY
         let anchor: Anchor = if centre.x < area.minX + area.width / 3 {
             top ? .topLeft : .bottomLeft
@@ -221,6 +248,11 @@ final class RecordingPanel: NSPanel {
         } else {
             top ? .top : .bottom
         }
+        return (anchor, screen)
+    }
+
+    private func snapToNearestAnchor() {
+        guard let (anchor, screen) = nearestAnchor() else { return }
         if let style { UserDefaults.standard.set(anchor.rawValue, forKey: "panelAnchor.\(style)") }
         content.anchor = anchor
         let target = anchoredFrame(size: content.preferredSize, on: screen)

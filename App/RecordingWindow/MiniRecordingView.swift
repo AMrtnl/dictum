@@ -4,7 +4,9 @@ import QuartzCore
 /// The small window, superwhisper-style. At rest it sleeps as a thin translucent
 /// pill hugging a screen edge or corner; hovering grows it into a toolbar
 /// (✦ Rewrite, Home, Expand); while dictating it is a black capsule with a live
-/// waveform, and while transcribing a glow runs along a row of dots. Messages
+/// waveform, and while transcribing a glow runs along a row of dots. With the live
+/// transcript on, the capsule grows, Dynamic Island-style, into a card with the words
+/// running along a line under the waveform. Messages
 /// ("No speech detected") appear in a bubble beside the pill. Shapes morph with
 /// Core Animation, in the window server.
 final class MiniRecordingView: RecordingWindowView {
@@ -49,6 +51,10 @@ final class MiniRecordingView: RecordingWindowView {
     private let dots = ProcessingDots(diameter: 4, spacing: 8)
     private let message = MessageBubble()
     private var messageVisible = false
+    /// The live transcript, a line under the waveform inside the expanded capsule.
+    private let line = LiveTextLine(font: .systemFont(ofSize: 12, weight: .medium))
+    /// The capsule is expanded around the live transcript.
+    private var liveShown = false
     /// Red "live" dot shown while recording hands-free.
     private let lockDot = CALayer()
     private var buttons: [Button] = []
@@ -63,7 +69,14 @@ final class MiniRecordingView: RecordingWindowView {
     /// One fixed window size for every state, so morphs are pure layer animation and
     /// the window never resizes under them. Its transparent part lets clicks through.
     private static let windowSize = NSSize(width: max(toolbarSize.width, messageWidth) + 2 * margin,
-                                           height: toolbarSize.height + 2 * margin + tooltipZone)
+                                           height: liveHeight + 2 * margin + tooltipZone)
+    /// The expanded capsule: the waveform row on top, the transcript line below. It grows
+    /// with the first words up to `liveMaximumWidth`, then holds while the words glide.
+    private static let liveHeight: CGFloat = 54
+    private static let liveMaximumWidth: CGFloat = 180
+    private static let liveInset: CGFloat = 14
+    /// Corners of the expanded card; the pill's are half its height.
+    private static let liveCornerRadius: CGFloat = 22
 
     init(style: WaveformStyle = .conveyor) {
         waveform = style.make(style.metrics(for: .mini))
@@ -81,6 +94,8 @@ final class MiniRecordingView: RecordingWindowView {
         capsule.addSublayer(clip)
         for row in [barRow, buttonRow] { row.bounds = .zero }
         clip.addSublayer(barRow)
+        line.layer.opacity = 0
+        clip.addSublayer(line.layer)
         capsule.addSublayer(buttonRow)
         barRow.addSublayer(waveform.layer)
         waveform.layout(in: CGRect(x: -Self.waveformSize.width / 2, y: -Self.waveformSize.height / 2,
@@ -145,8 +160,19 @@ final class MiniRecordingView: RecordingWindowView {
         switch visual {
         case .sleep: Self.sleepSize
         case .toolbar: Self.toolbarSize
-        case .active: isLocked && mode == .recording ? Self.lockedActiveSize : Self.activeSize
+        case .active:
+            liveShown ? liveSize : isLocked && mode == .recording ? Self.lockedActiveSize : Self.activeSize
         }
+    }
+
+    private var liveSize: CGSize {
+        let pill = isLocked && mode == .recording ? Self.lockedActiveSize : Self.activeSize
+        let width = min(max(pill.width, line.textWidth + 2 * Self.liveInset), Self.liveMaximumWidth)
+        return CGSize(width: width.rounded(.up), height: Self.liveHeight)
+    }
+
+    private func cornerRadius(for size: CGSize) -> CGFloat {
+        size.height > Self.activeSize.height ? Self.liveCornerRadius : size.height / 2
     }
 
     /// The surface hugs the anchored side of the window; any extra room (tooltips) is on the inner side.
@@ -181,25 +207,37 @@ final class MiniRecordingView: RecordingWindowView {
         let size = size(of: next)
         let frame = anchoredRect(size)
         let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+        let radius = cornerRadius(for: size)
+        let expanded = next == .active && liveShown
+        // Expanded, the waveform keeps the pill's row at the top; the words run below it.
+        let barCentre = expanded ? CGPoint(x: centre.x, y: size.height - Self.activeSize.height / 2 - 2) : centre
+        let lineHeight = line.lineHeight
+        let lineFrame = CGRect(x: Self.liveInset, y: 8, width: max(0, size.width - 2 * Self.liveInset), height: lineHeight)
 
         // Geometry: one spring for shape, corners, shadow and the centred rows, set
         // explicitly so every property moves on the same curve.
         withoutAnimation {
             spring(capsule, "bounds", NSValue(rect: CGRect(origin: .zero, size: size)), animated)
             spring(capsule, "position", NSValue(point: CGPoint(x: frame.midX, y: frame.midY)), animated)
-            spring(capsule, "cornerRadius", size.height / 2, animated)
+            spring(capsule, "cornerRadius", radius, animated)
             spring(capsule, "shadowPath",
-                   CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: size.height / 2,
-                          cornerHeight: size.height / 2, transform: nil), animated)
+                   CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: radius,
+                          cornerHeight: radius, transform: nil), animated)
             spring(clip, "bounds", NSValue(rect: CGRect(origin: .zero, size: size)), animated)
             spring(clip, "position", NSValue(point: centre), animated)
-            spring(clip, "cornerRadius", size.height / 2, animated)
-            for row in [barRow, buttonRow] { spring(row, "position", NSValue(point: centre), animated) }
+            spring(clip, "cornerRadius", radius, animated)
+            spring(barRow, "position", NSValue(point: barCentre), animated)
+            spring(buttonRow, "position", NSValue(point: centre), animated)
+            spring(line.layer, "bounds", NSValue(rect: CGRect(origin: .zero, size: lineFrame.size)), animated)
+            spring(line.layer, "position", NSValue(point: CGPoint(x: lineFrame.midX, y: lineFrame.midY)), animated)
             spring(buttonRow, "transform", CATransform3DMakeScale(next == .toolbar ? 1 : 0.7, next == .toolbar ? 1 : 0.7, 1), animated)
             let locked = next == .active && isLocked && mode == .recording
             spring(waveform.layer, "transform", CATransform3DMakeTranslation(locked ? 8 : 0, 0, 0), animated)
-            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + size.height / 2, y: 0)), animated)  // concentric with the end
+            // Concentric with the pill's end; in the card, tucked a little up toward its corner.
+            let end = expanded ? Self.liveInset : size.height / 2
+            spring(lockDot, "position", NSValue(point: CGPoint(x: -size.width / 2 + end, y: expanded ? 4 : 0)), animated)
             hoverPad.frame = frame.insetBy(dx: -4, dy: -6)
+            // Going to sleep, the finished text stays put while it fades out.
             if messageVisible { spring(message.layer, "position", NSValue(point: messagePosition(for: frame)), animated) }
         }
 
@@ -227,6 +265,7 @@ final class MiniRecordingView: RecordingWindowView {
             capsule.shadowRadius = 8
         }
         fade(barRow, to: next == .active ? 1 : 0, animated: animated)
+        fade(line.layer, to: expanded ? 1 : 0, animated: animated)
         updateLockDot(visible: next == .active && isLocked && mode == .recording)
         fade(buttonRow, to: next == .toolbar ? 1 : 0, animated: animated)
         if next == .toolbar, messageVisible { hideMessage() }  // the toolbar's tooltips take that spot
@@ -235,6 +274,7 @@ final class MiniRecordingView: RecordingWindowView {
             tooltip.opacity = 0
         }
         CATransaction.commit()
+        line.layout(animated: animated)
         updateButtonHighlights()
 
         hoverPoll?.invalidate()
@@ -282,7 +322,8 @@ final class MiniRecordingView: RecordingWindowView {
         switch mode {
         case .idle:
             stopAnimations()
-            apply(.sleep, animated: window?.isVisible == true)
+            // The pasted text stays a moment; the pill goes to sleep once it's cleared.
+            if !liveShown { apply(.sleep, animated: window?.isVisible == true) }
         case .recording:
             stopAnimations()
             apply(.active, animated: window?.isVisible == true)
@@ -331,6 +372,26 @@ final class MiniRecordingView: RecordingWindowView {
         let x = min(max(surface.midX, size.width / 2 + 4), bounds.width - size.width / 2 - 4)
         let y = anchor.isTop ? surface.minY - 8 - size.height / 2 : surface.maxY + 8 + size.height / 2
         return CGPoint(x: x, y: y)
+    }
+
+    // MARK: Live transcript
+
+    /// The first words open the capsule into a card; it widens with them up to its maximum,
+    /// then holds while they glide. Cleared, it folds back into the pill (or to sleep).
+    override func liveTextDidChange() {
+        if hasLiveText {
+            if !liveShown { line.clear() }  // the last dictation's words don't glide away first
+            line.set(committed: liveCommitted, tail: liveTail, rewrite: liveRewrite, final: liveIsFinal)
+        }
+        let shown = hasLiveText
+        guard shown != liveShown || (shown && liveSize != capsule.bounds.size) else { return }
+        liveShown = shown
+        let animated = window?.isVisible == true
+        if mode == .idle {
+            apply(shown ? .active : .sleep, animated: animated)
+        } else if visual == .active {
+            apply(.active, animated: animated)
+        }
     }
 
     // MARK: Hover

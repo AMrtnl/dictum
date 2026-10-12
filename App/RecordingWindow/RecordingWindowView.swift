@@ -59,6 +59,54 @@ class RecordingWindowView: NSView {
         didSet { if processingLabel != oldValue { labelsDidChange() } }
     }
 
+    // MARK: Live transcript
+
+    /// Whether this window was built with room for the live transcript.
+    var showsLiveText = false
+    private(set) var liveCommitted = ""
+    private(set) var liveTail = ""
+    private(set) var liveRewrite = false
+    /// The finished transcript (or its rewrite) is showing; the window lingers on it a moment.
+    private(set) var liveIsFinal = false
+    var hasLiveText: Bool { !liveCommitted.isEmpty || !liveTail.isEmpty }
+    private var liveClearWork: DispatchWorkItem?
+
+    func setLiveText(committed: String, tail: String, rewrite: Bool) {
+        liveClearWork?.cancel()
+        liveCommitted = committed
+        liveTail = tail
+        liveRewrite = rewrite
+        liveIsFinal = false
+        if showsLiveText { liveTextDidChange() }
+    }
+
+    /// Replaces the preview with the text that is about to be pasted.
+    func finalizeLiveText(_ text: String) {
+        guard hasLiveText else { return }
+        liveClearWork?.cancel()
+        liveCommitted = text
+        liveTail = ""
+        liveIsFinal = true
+        if showsLiveText { liveTextDidChange() }
+    }
+
+    func clearLiveText(after delay: TimeInterval = 0) {
+        liveClearWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            liveCommitted = ""
+            liveTail = ""
+            liveIsFinal = false
+            if showsLiveText { liveTextDidChange() }
+        }
+        liveClearWork = work
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        } else {
+            work.perform()
+        }
+    }
+
     /// Newest first. Styles read it centre-out, so new sound appears in the
     /// middle and ripples toward the edges.
     private(set) var levels: [Float]
@@ -124,6 +172,8 @@ class RecordingWindowView: NSView {
     var isResizable: Bool { false }
     /// The only part of the window that takes the mouse; clicks anywhere else in the
     /// (mostly transparent) window go to the app underneath. The surface, plus the resize band.
+    /// For the snap guides, which draw the surface's shape.
+    var surfaceCornerRadius: CGFloat { min(surfaceFrame.height / 2, 22) }
     var interactiveFrame: CGRect { surfaceFrame.insetBy(dx: isResizable ? -5 : -2, dy: isResizable ? -5 : -2) }
     var minimumSurfaceSize: CGSize { surfaceFrame.size }
     var maximumSurfaceSize: CGSize { surfaceFrame.size }
@@ -145,18 +195,21 @@ class RecordingWindowView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let action = control(at: point) {
+        let action = control(at: point)
+        // Snapping windows can be dragged by their controls too: a click acts, a drag moves.
+        if let action, !snapsToAnchors {
             action()
             return
         }
         guard let panel = window as? RecordingPanel else { return }
         let margins = CGSize(width: bounds.width - surfaceFrame.width, height: bounds.height - surfaceFrame.height)
-        panel.track(
+        let moved = panel.track(
             event,
             resizing: resizeEdges(at: point),
             minimum: NSSize(width: minimumSurfaceSize.width + margins.width, height: minimumSurfaceSize.height + margins.height),
             maximum: NSSize(width: maximumSurfaceSize.width + margins.width, height: maximumSurfaceSize.height + margins.height)
         )
+        if !moved { action?() }
     }
 
     /// Which surface edges are under `point`: a band 6 pt inside to 5 pt outside each edge.
@@ -222,6 +275,7 @@ class RecordingWindowView: NSView {
     func modeDidChange() {}
     func labelsDidChange() {}
     func lockDidChange() {}
+    func liveTextDidChange() {}
     func stopAnimations() {}
 
     override func viewDidChangeBackingProperties() {

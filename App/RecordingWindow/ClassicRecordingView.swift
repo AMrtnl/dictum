@@ -4,6 +4,7 @@ import QuartzCore
 /// Wide card: a long waveform above a bar with the mode name and key hints that
 /// follow the state (Start ⌥Space · Stop ⌥Space  Cancel esc · Cancel esc). Drag its
 /// edges to resize: the waveform gains bars as it widens and grows taller as the card does.
+/// With the live transcript on, what is being said runs along a line under the waveform.
 final class ClassicRecordingView: RecordingWindowView {
     private static let defaultCardSize = CGSize(width: 434, height: 136)
     private static let margin = NSEdgeInsets(top: 22, left: 20, bottom: 14, right: 20)
@@ -29,11 +30,14 @@ final class ClassicRecordingView: RecordingWindowView {
     private let stopHint: CALayer
     private let cancelHint: CALayer
     private let collapseIcon = CALayer()
+    private let line = LiveTextLine(font: .systemFont(ofSize: 15))
+    /// Extra card height for the live transcript line.
+    private static let liveRowHeight: CGFloat = 28
     /// Narrowest card that still fits the footer without overlap.
     private let minimumCardWidth: CGFloat
 
     /// - Parameter stopKeys: key caps for the dictation shortcut, e.g. ["⌥", "Space"].
-    init(stopKeys: [String], style: WaveformStyle = .conveyor) {
+    init(stopKeys: [String], style: WaveformStyle = .conveyor, liveText: Bool = false) {
         waveform = style.make(style.metrics(for: .classic))
         let midY = Self.footerHeight / 2
         modeLabel = makeTextLayer("Dictation", font: Self.footerFont, color: Self.dim, x: 38, midY: midY)
@@ -41,8 +45,10 @@ final class ClassicRecordingView: RecordingWindowView {
         startHint = Self.makeHint("Start", keys: stopKeys, midY: midY)
         stopHint = Self.makeHint("Stop", keys: stopKeys, midY: midY)
         cancelHint = Self.makeHint("Cancel", keys: ["esc"], midY: midY)
+        let cardSize = CGSize(width: Self.defaultCardSize.width,
+                              height: Self.defaultCardSize.height + (liveText ? Self.liveRowHeight : 0))
         card = makeSurface(
-            frame: CGRect(origin: CGPoint(x: Self.margin.left, y: Self.margin.bottom), size: Self.defaultCardSize),
+            frame: CGRect(origin: CGPoint(x: Self.margin.left, y: Self.margin.bottom), size: cardSize),
             cornerRadius: 22,
             shadowRadius: 14
         )
@@ -53,13 +59,15 @@ final class ClassicRecordingView: RecordingWindowView {
 
         super.init(
             size: NSSize(
-                width: Self.defaultCardSize.width + Self.margin.left + Self.margin.right,
-                height: Self.defaultCardSize.height + Self.margin.top + Self.margin.bottom
+                width: cardSize.width + Self.margin.left + Self.margin.right,
+                height: cardSize.height + Self.margin.top + Self.margin.bottom
             ),
             historyLength: 1
         )
+        showsLiveText = liveText
         layer?.addSublayer(card)
         card.addSublayer(waveform.layer)
+        if liveText { card.addSublayer(line.layer) }
         card.addSublayer(dots.layer)
 
         footer.cornerRadius = 11
@@ -104,7 +112,9 @@ final class ClassicRecordingView: RecordingWindowView {
     }
 
     override var isResizable: Bool { true }
-    override var minimumSurfaceSize: CGSize { CGSize(width: max(360, minimumCardWidth), height: 132) }
+    override var minimumSurfaceSize: CGSize {
+        CGSize(width: max(360, minimumCardWidth), height: 132 + (showsLiveText ? Self.liveRowHeight : 0))
+    }
     override var maximumSurfaceSize: CGSize { CGSize(width: 1200, height: 420) }
 
     override func layoutSurface() {
@@ -122,8 +132,17 @@ final class ClassicRecordingView: RecordingWindowView {
         layoutModeLabel()
         collapseIcon.frame = collapseFrame(in: size).insetBy(dx: 3, dy: 3)
 
-        // Waveform: centred in the band between the footer and the collapse control's row.
-        let bottom = Self.footerInset + Self.footerHeight
+        // The live transcript just above the footer, as wide as the waveform.
+        var bottom = Self.footerInset + Self.footerHeight
+        if showsLiveText {
+            let height = line.lineHeight
+            line.layer.frame = CGRect(x: Self.waveformInset, y: bottom + 8,
+                                      width: size.width - 2 * Self.waveformInset, height: height)
+            line.layout()
+            bottom += 8 + height
+        }
+
+        // Waveform: centred in the band between the footer (or live line) and the collapse control's row.
         let top = size.height - 32
         let height = max(22, min((top - bottom) * 0.72, 200))
         let rect = CGRect(x: Self.waveformInset, y: (bottom + top) / 2 - height / 2,
@@ -165,6 +184,12 @@ final class ClassicRecordingView: RecordingWindowView {
     }
 
     // MARK: State
+
+    /// Fills the card's width from the left, then glides as words keep coming.
+    override func liveTextDidChange() {
+        guard hasLiveText else { return line.clear() }
+        line.set(committed: liveCommitted, tail: liveTail, rewrite: liveRewrite, final: liveIsFinal)
+    }
 
     override func levelPushed(_ level: Float) {
         guard mode == .recording else { return }

@@ -16,7 +16,8 @@ and does no work between requests.
 Latency: the app sends "prepare" when a dictation starts (loads / warms the model while
 the user talks) and, during long takes, "partial" every few seconds, which transcribes the
 finished stretches of the WAV that is still being written. On "transcribe" only the last
-stretch is left. The loaded speech model is wired into RAM, so macOS can't swap it out
+stretch is left. With the live transcript on, "live" replaces "partial": it does the same
+work and also previews the stretch still being spoken. The loaded speech model is wired into RAM, so macOS can't swap it out
 between dictations (paging 2.5 GB back in took ~18 s on a Mac under memory pressure).
 """
 
@@ -411,6 +412,42 @@ class Models:
             self.touch("asr")
             return work["offset"] / 16000
 
+    def live(self, path: str, name: str, language: str | None, vocabulary: list[str]) -> tuple[str, str]:
+        """Live transcript of a take that is still being recorded: (committed, tail).
+        Finished stretches are transcribed once and kept for the final "transcribe", like
+        "partial"; the stretch still being spoken is previewed every call and thrown away.
+        Cohere doesn't split takes, so it previews the whole take (its last 30 s when long)."""
+        import mlx.core as mx
+
+        name = self.canonical(name)
+        with self.lock:
+            if path in self.finished or not os.path.exists(path):
+                return "", ""
+            self.load_speech(name)
+            audio = read_growing_wav(path)
+            if name == "cohere":
+                committed = ""
+                tail = audio[-30 * 16000:]
+            else:
+                work = self.ahead.get(path)
+                if work is None or work["model"] != name:
+                    work = {"model": name, "offset": 0, "texts": [], "durations": {}, "segments": 0, "seconds": 0.0}
+                    self.ahead = {path: work}
+                started = time.time()
+                work["offset"] += self._transcribe_segments(audio[work["offset"]:], language, vocabulary, work,
+                                                            keep_last=True)
+                work["seconds"] += time.time() - started
+                committed = " ".join(work["texts"])
+                tail = audio[work["offset"]:]
+            text = ""
+            if len(tail) >= 8000 and speech_segments(tail):  # silence makes models hallucinate
+                out = self._run(tail, language, vocabulary)
+                text = (out.text or "").strip()
+            mx.clear_cache()
+            self.last_used = time.time()
+            self.touch("asr")
+            return committed, text
+
     def transcribe(self, path: str, name: str, language: str | None, vocabulary: list[str]) -> tuple[str, str]:
         """Returns (text, language code). With `language` None, models that detect the
         language do so phrase by phrase, so a take can mix languages."""
@@ -625,6 +662,10 @@ def handle(models: Models, request: dict, emit) -> dict:
         done = models.partial(request["path"], request["model"], request.get("language"),
                               request.get("vocabulary") or [])
         return {"ok": True, "seconds": done}
+    if op == "live":  # live transcript while recording: finished stretches + a preview of the rest
+        committed, tail = models.live(request["path"], request["model"], request.get("language"),
+                                      request.get("vocabulary") or [])
+        return {"ok": True, "text": committed, "tail": tail}
     if op == "select":  # preload a speech model so the next dictation doesn't wait for it
         with models.lock:
             models.load_speech(models.canonical(request["model"]))

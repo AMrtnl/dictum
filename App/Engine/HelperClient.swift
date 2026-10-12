@@ -24,6 +24,8 @@ nonisolated struct HelperMessage: Decodable, Sendable {
     var ok: Bool?
     var error: String?
     var text: String?
+    /// "live": the stretch still being spoken (`text` holds the finished ones).
+    var tail: String?
     var applied: Bool?
     var seconds: Double?
     var language: String?

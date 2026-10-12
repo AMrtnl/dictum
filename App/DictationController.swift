@@ -53,6 +53,7 @@ final class DictationController {
         var style: RecordingWindowStyle
         var stopKeys: [String]
         var waveform: WaveformStyle
+        var liveText: Bool
     }
 
     private init() {}
@@ -93,6 +94,7 @@ final class DictationController {
             // Through `self.panel`, so levels follow a Classic ↔ Mini switch mid-recording.
             try recorder.start(deviceUID: settings.microphoneUID) { [weak self] level in
                 self?.panel?.content.push(level: level)
+                MenuBarAnimator.shared.push(level: level)
             } onLimit: { [weak self] in
                 self?.stopRecording()
             }
@@ -113,7 +115,9 @@ final class DictationController {
         panel?.content.mode = .recording
         panel?.content.modeTitle = activeMode.title
         panel?.content.resetLevels()
+        panel?.content.clearLiveText()
         panel?.show()
+        MenuBarAnimator.shared.start(style: settings.waveformStyle, rewrite: activeMode == .rewrite)
     }
 
     private func released(_ shortcut: KeyboardShortcuts.Name) {
@@ -160,6 +164,7 @@ final class DictationController {
         state = .processing
         panel?.content.processingLabel = "Transcribing…"
         panel?.content.mode = .processing
+        MenuBarAnimator.shared.startProcessing()
         let mode = activeMode
         let deliverText = !debugNoPaste
         processingTask = Task { await process(take, mode: mode, deliverText: deliverText) }
@@ -235,6 +240,7 @@ final class DictationController {
                 return
             }
 
+            showFinalText(VocabularyStore.shared.apply(to: text))
             var note: String?
             if mode == .rewrite {
                 if engine.rewriteModel == .installed {
@@ -260,6 +266,7 @@ final class DictationController {
                                              language: language, duration: take.duration)
             }
             discard(take)
+            showFinalText(text)
             finish()
             log.info("""
                 \(take.duration, format: .fixed(precision: 1), privacy: .public)s take: \
@@ -323,6 +330,7 @@ final class DictationController {
     /// Only for the models that split takes at pauses (Qwen3, Nemotron); Cohere is fast enough.
     private func transcribeWhileRecording() {
         aheadTask?.cancel()
+        if settings.liveTranscript, panel != nil { return transcribeLive() }
         guard settings.speechModel.detectsLanguage, let url = recorder.recordingURL else { return }
         let (hint, words) = speechHints()
         aheadTask = Task { [weak self] in
@@ -332,6 +340,37 @@ final class DictationController {
                 try? await Task.sleep(for: .seconds(4))
             }
         }
+    }
+
+    /// Live transcript: about every second the helper transcribes any newly finished stretch
+    /// (kept for the final transcription, as above) and previews the one still being spoken.
+    /// One request at a time, so a slow model just updates less often.
+    private func transcribeLive() {
+        guard let url = recorder.recordingURL else { return }
+        let (hint, words) = speechHints()
+        let language = settings.speechModel.detectsLanguage ? hint : liveLanguage()
+        let rewrite = activeMode == .rewrite
+        aheadTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            while !Task.isCancelled, let engine = self?.engine, self?.state == .recording {
+                let started = ContinuousClock.now
+                if let live = await engine.live(url, language: language, vocabulary: words),
+                   !Task.isCancelled, let self, state == .recording {
+                    let vocabulary = VocabularyStore.shared
+                    panel?.content.setLiveText(committed: vocabulary.apply(to: live.committed),
+                                               tail: vocabulary.apply(to: live.tail), rewrite: rewrite)
+                }
+                // At most ~1 update a second, however fast the model is.
+                try? await Task.sleep(until: started + .milliseconds(900))
+            }
+        }
+    }
+
+    /// Cohere needs a language: the one the last dictation was in, among the user's.
+    private func liveLanguage() -> SpeechLanguage {
+        guard settings.autoLanguage else { return settings.language }
+        let spoken = settings.spokenLanguages
+        return settings.lastLanguage.flatMap { spoken.contains($0) ? $0 : nil } ?? spoken.first ?? settings.language
     }
 
     private func deliver(_ text: String) {
@@ -409,16 +448,32 @@ final class DictationController {
 
     private func finish() {
         state = .idle
+        MenuBarAnimator.shared.stop()
         if isLocked { setLocked(false) }
         processingTask = nil
         cancelListeners.forEach { $0.cancel() }
         cancelListeners = []
+        // The pasted text stays on screen a moment, so it can be read back.
+        let linger: TimeInterval = panel?.content.liveIsFinal == true ? 0.9 : 0
+        panel?.content.clearLiveText(after: linger)
         if settings.alwaysShowIndicator, settings.recordingWindowStyle != .none, let panel {
             panel.content.mode = .idle
             panel.content.resetLevels()
+        } else if linger > 0, let panel {
+            DispatchQueue.main.asyncAfter(deadline: .now() + linger) { [weak self] in
+                guard let self, state == .idle, self.panel === panel else { return }
+                panel.hide()
+            }
         } else {
             panel?.hide()
         }
+    }
+
+    /// With the live transcript on, the preview gives way to the text that will be pasted
+    /// (in Rewrite: first the transcript, then its rewrite).
+    private func showFinalText(_ text: String) {
+        guard settings.liveTranscript else { return }
+        panel?.content.finalizeLiveText(text)
     }
 
     private func discard(_ take: AudioRecorder.Take?) {
@@ -445,7 +500,7 @@ final class DictationController {
 
     private func currentPanel(for shortcut: KeyboardShortcuts.Name = .pushToTalk) -> RecordingPanel? {
         let config = PanelConfig(style: settings.recordingWindowStyle, stopKeys: Self.keys(for: shortcut),
-                                 waveform: settings.waveformStyle)
+                                 waveform: settings.waveformStyle, liveText: settings.liveTranscript)
         if config != panelConfig {
             if let old = panel {  // cross-fade: keep the old window alive while it fades out
                 retiringPanels.append(old)
@@ -457,9 +512,11 @@ final class DictationController {
             panelConfig = config
             let view: RecordingWindowView? = switch config.style {
             case .mini: MiniRecordingView(style: config.waveform)
-            case .classic: ClassicRecordingView(stopKeys: config.stopKeys, style: config.waveform)
+            case .classic: ClassicRecordingView(stopKeys: config.stopKeys, style: config.waveform,
+                                                liveText: config.liveText)
             case .none: nil
             }
+            view?.showsLiveText = config.liveText
             view?.onToggleSize = { [weak self] in self?.toggleWindowSize() }
             view?.onToggleRewrite = { [weak self] in
                 guard let self else { return }
@@ -481,22 +538,41 @@ final class DictationController {
         panel.content.modeTitle = settings.mode.title
         panel.content.resetLevels()
         panel.content.mode = .recording
+        panel.content.clearLiveText()
         panel.show()
+        let live = settings.liveTranscript
+        let rewrite = settings.mode == .rewrite
+        let words = Self.previewSentence.split(separator: " ").map(String.init)
+        MenuBarAnimator.shared.start(style: settings.waveformStyle, rewrite: rewrite)
         previewTask = Task { [weak self] in
             var speech = SyntheticSpeech(seed: .random(in: 1...10_000))
-            for _ in 0..<95 {
+            for frame in 0..<95 {
                 guard !Task.isCancelled, self?.state == .idle else { return }
-                panel.content.push(level: speech.next())
+                let level = speech.next()
+                panel.content.push(level: level)
+                MenuBarAnimator.shared.push(level: level)
+                if live, frame % 6 == 5 {  // a word every ~0.2 s; the last three still "being said"
+                    let said = min(words.count, (frame + 1) / 6)
+                    let settled = max(0, said - 3)
+                    panel.content.setLiveText(committed: words[..<settled].joined(separator: " "),
+                                              tail: words[settled..<said].joined(separator: " "), rewrite: rewrite)
+                }
                 try? await Task.sleep(for: .milliseconds(33))
             }
             guard !Task.isCancelled, self?.state == .idle else { return }
             panel.content.processingLabel = "Transcribing…"
             panel.content.mode = .processing
+            MenuBarAnimator.shared.startProcessing()
             try? await Task.sleep(for: .seconds(1.3))
             guard !Task.isCancelled, let self, state == .idle else { return }
+            if live { panel.content.finalizeLiveText(Self.previewSentence) }
             finish()
         }
     }
+
+    private static let previewSentence =
+        "This is the live transcript: it follows what you say, and the newest words glide in on the right."
+
 
     /// The collapse / expand control: Classic ↔ Mini.
     private func toggleWindowSize() {
@@ -511,6 +587,10 @@ final class DictationController {
         panel.content.processingLabel = previous?.processingLabel ?? "Transcribing…"
         panel.content.mode = state == .recording ? .recording : .processing
         panel.content.resetLevels()
+        if let previous, previous.hasLiveText {
+            panel.content.setLiveText(committed: previous.liveCommitted, tail: previous.liveTail,
+                                      rewrite: previous.liveRewrite)
+        }
         panel.show()
     }
 
@@ -529,7 +609,8 @@ final class DictationController {
 
     private func observeIndicatorSettings() {
         withObservationTracking {
-            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator, settings.mode, settings.waveformStyle)
+            _ = (settings.recordingWindowStyle, settings.alwaysShowIndicator, settings.mode, settings.waveformStyle,
+                 settings.liveTranscript)
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }

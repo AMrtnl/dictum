@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         let preview = UserDefaults.standard.double(forKey: "previewPill")
         if preview > 0 { DictationController.shared.simulateHold(seconds: preview) }
+        // `-previewWindow YES`: Settings' "Preview on Screen", e.g. with `-liveTranscript YES`.
+        if UserDefaults.standard.bool(forKey: "previewWindow") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { DictationController.shared.previewRecordingWindow() }
+        }
         if UserDefaults.standard.bool(forKey: "runSetUp") { Task { await SpeechEngine.shared.setUp() } }
         if UserDefaults.standard.bool(forKey: "debugPermissions") {
             let log = Logger(subsystem: "ch.martinoli.dictum", category: "debug")
@@ -66,13 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Template symbol that reflects what Dictum is doing.
+/// Template symbol that reflects what Dictum is doing; a live waveform while dictating.
 private struct MenuBarIcon: View {
     private let controller = DictationController.shared
     private let engine = SpeechEngine.shared
+    private let animator = MenuBarAnimator.shared
 
     var body: some View {
-        Image(systemName: symbol)
+        if let image = animator.image {
+            Image(nsImage: image)
+        } else {
+            Image(systemName: symbol)
+        }
     }
 
     private var symbol: String {

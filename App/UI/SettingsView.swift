@@ -39,6 +39,13 @@ struct ConfigurationPage: View {
                     WaveformStylePicker(selection: $settings.waveformStyle)
                 }
                 .padding(.vertical, 4)
+                Toggle("Show live transcription", isOn: $settings.liveTranscript)
+                    .disabled(settings.recordingWindowStyle == .none)
+                Text("Shows what you're saying while you dictate: in a bubble beside the small window, or along the bottom of the large one. Words still being said are dimmer — amber in Rewrite — and the text pasted shows for a moment at the end. It keeps the speech model busy while you talk.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Toggle("Animate the menu bar icon", isOn: $settings.animateMenuBar)
+                Text("While you dictate, Dictum's menu bar icon becomes a small live waveform in the style above; amber with ✦ in Rewrite, pulsing dots while transcribing.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Always show", isOn: $settings.alwaysShowIndicator)
                     .disabled(settings.recordingWindowStyle == .none)
                 Text("Keeps the small window on screen between dictations, asleep as a thin pill; hover it for Rewrite, Home and Expand. It does no work while idle.")
