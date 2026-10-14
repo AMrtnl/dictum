@@ -122,3 +122,92 @@ struct InlineNote<Action: View>: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.07)))
     }
 }
+
+// MARK: - DataFast-style lists
+
+/// The fill for a card that sits on the window background, in light and dark.
+extension Color {
+    static let cardFill = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.05) : NSColor(white: 1, alpha: 0.75)
+    })
+    static let cardBorder = Color.primary.opacity(0.08)
+}
+
+/// A rounded card: the container for lists and charts.
+struct DashCard<Content: View>: View {
+    var padding: CGFloat = 14
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.cardFill))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.cardBorder))
+    }
+}
+
+/// Text tabs at the top of a card: the chosen one sits in a soft pill.
+struct TabStrip: View {
+    let tabs: [String]
+    @Binding var selection: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs.indices, id: \.self) { index in
+                Button { selection = index } label: {
+                    Text(tabs[index])
+                        .font(.system(size: 12, weight: selection == index ? .semibold : .regular))
+                        .foregroundStyle(selection == index ? .primary : .secondary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 7)
+                            .fill(selection == index ? Color.primary.opacity(0.08) : .clear))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// A list row with a bar behind it showing its share; the value sits on the right.
+struct BarRow<Icon: View>: View {
+    let label: String
+    let value: String
+    let fraction: Double
+    @ViewBuilder var icon: Icon
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            icon.frame(width: 18, height: 18)
+            Text(label).font(.system(size: 13)).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(value).font(.system(size: 12.5, weight: .medium)).monospacedDigit()
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .background(alignment: .leading) {
+            GeometryReader { proxy in
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor.opacity(hovering ? 0.28 : 0.17))
+                    .frame(width: max(6, proxy.size.width * min(max(fraction, 0), 1)))
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label), \(value)")
+    }
+}
+
+/// A flag drawn as an icon: the emoji, sized to sit in a list row.
+struct FlagIcon: View {
+    let code: String
+
+    var body: some View {
+        Text(SpeechLanguage.flag(for: code)).font(.system(size: 14))
+    }
+}

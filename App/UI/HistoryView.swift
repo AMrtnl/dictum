@@ -1,6 +1,21 @@
 import SwiftUI
 
+/// History: every dictation, newest first, grouped into one card per day. Filter by mode,
+/// search the text, hover a dictation to copy or delete it, click it to read all of it.
 struct HistoryView: View {
+    enum Filter: Int, CaseIterable {
+        case all, dictation, rewrite, failed
+
+        var title: String {
+            switch self {
+            case .all: "All"
+            case .dictation: "Dictation"
+            case .rewrite: "Rewrite"
+            case .failed: "Failed"
+            }
+        }
+    }
+
     /// Entries grouped by day: Today, Yesterday, then dates.
     static func days(_ entries: [HistoryEntry]) -> [(title: String, entries: [HistoryEntry])] {
         let calendar = Calendar.current
@@ -19,108 +34,226 @@ struct HistoryView: View {
         }
     }
 
+    @Bindable private var settings = AppSettings.shared
     private let history = HistoryStore.shared
     @State private var query = ""
+    @State private var filter = 0
+    @State private var confirmClear = false
 
     private var entries: [HistoryEntry] {
-        guard !query.isEmpty else { return history.entries }
-        return history.entries.filter {
-            $0.text.localizedCaseInsensitiveContains(query) || ($0.original?.localizedCaseInsensitiveContains(query) ?? false)
+        history.entries.filter { entry in
+            let matchesFilter = switch Filter(rawValue: filter) ?? .all {
+            case .all: true
+            case .dictation: entry.status == .done && entry.mode != DictationMode.rewrite.rawValue
+            case .rewrite: entry.status == .done && entry.mode == DictationMode.rewrite.rawValue
+            case .failed: entry.status == .failed
+            }
+            guard matchesFilter else { return false }
+            guard !query.isEmpty else { return true }
+            return entry.text.localizedCaseInsensitiveContains(query)
+                || (entry.original?.localizedCaseInsensitiveContains(query) ?? false)
+                || (entry.app?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 
     var body: some View {
-        Group {
-            if history.entries.isEmpty {
-                ContentUnavailableView {
-                    Label("No dictations yet", systemImage: "waveform")
-                } description: {
-                    Text("Tap \(DictationController.keys(for: .pushToTalk).joined()) anywhere and speak. Your dictations show up here.")
-                }
-            } else if entries.isEmpty {
-                ContentUnavailableView.search(text: query)
-            } else {
-                List {
-                    ForEach(Self.days(entries), id: \.title) { day in
-                        Section(day.title) {
-                            ForEach(day.entries) { entry in
-                                HistoryRow(entry: entry)
-                                    .listRowSeparator(.visible)
-                            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                controls
+                if history.entries.isEmpty {
+                    empty("No dictations yet",
+                          detail: "Tap \(DictationController.keys(for: .pushToTalk).joined()) anywhere and speak. Your dictations show up here.")
+                } else if entries.isEmpty {
+                    empty("Nothing matches", detail: "Try another word or filter.")
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        ForEach(Self.days(entries), id: \.title) { day in
+                            daySection(day.title, day.entries)
                         }
                     }
                 }
-                .listStyle(.inset)
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+            .padding(.bottom, 28)
+            .frame(maxWidth: 860, alignment: .leading)
+        }
+        .confirmationDialog("Clear all saved dictations?", isPresented: $confirmClear) {
+            Button("Clear History", role: .destructive) { history.clear() }
+        } message: {
+            Text("The text of every dictation is removed from this Mac.")
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        let done = history.entries.filter { $0.status == .done }
+        let words = done.reduce(0) { $0 + UsageStats.words(in: $1.text) }
+        return HStack(alignment: .center, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 18) {
+                figure(done.count.formatted(), done.count == 1 ? "dictation" : "dictations")
+                figure(words.formatted(), "words")
+            }
+            Spacer()
+            Toggle("Keep history", isOn: $settings.saveHistory)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Dictations are kept as text, on this Mac only.")
+            Menu {
+                Button("Clear History…", role: .destructive) { confirmClear = true }
+                    .disabled(history.entries.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More")
+        }
+    }
+
+    private func figure(_ value: String, _ label: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(value).font(.system(size: 22, weight: .bold))
+            Text(label).font(.system(size: 13)).foregroundStyle(.secondary)
+        }
+    }
+
+    private var controls: some View {
+        HStack(spacing: 12) {
+            TabStrip(tabs: Filter.allCases.map(\.title), selection: $filter)
+            Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
+                TextField("Search", text: $query)
+                    .textFieldStyle(.plain)
+                    .frame(width: 180)
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                        .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+        }
+    }
+
+    // MARK: Days
+
+    private func daySection(_ title: String, _ entries: [HistoryEntry]) -> some View {
+        let words = entries.filter { $0.status == .done }.reduce(0) { $0 + UsageStats.words(in: $1.text) }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text("\(entries.count) · \(words.formatted()) words")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            DashCard(padding: 0) {
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 { Divider().padding(.leading, 50) }
+                        HistoryRow(entry: entry)
+                    }
+                }
             }
         }
-        .searchable(text: $query, placement: .toolbar, prompt: "Search")
-        .frame(minWidth: 460, minHeight: 360)
+    }
+
+    private func empty(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: "waveform").font(.system(size: 24)).foregroundStyle(.tertiary).padding(.bottom, 4)
+            Text(title).font(.system(size: 14, weight: .semibold))
+            Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
+        }
+        .padding(.top, 20)
     }
 }
 
+/// One dictation: where it went, what was said, and its details; click to read it all.
 private struct HistoryRow: View {
     let entry: HistoryEntry
     @State private var hovering = false
+    @State private var expanded = false
     @State private var showingOriginal = false
     @State private var retrying = false
+    @State private var copied = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Group {
-                if entry.status != .failed, entry.appBundleID != nil || entry.app != nil {
-                    Image(nsImage: AppIcons.icon(for: entry.appBundleID, name: entry.app)).resizable()
-                } else {
-                    Image(systemName: entry.status == .failed ? "exclamationmark.triangle" : "waveform")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 20, height: 20)
-            .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
+            icon
+            VStack(alignment: .leading, spacing: 6) {
                 if entry.status == .failed {
-                    Label("Transcription failed", systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.orange)
+                    Text("Transcription failed").font(.system(size: 13, weight: .medium)).foregroundStyle(.orange)
                 } else {
                     Text(showingOriginal ? (entry.original ?? entry.text) : entry.text)
                         .font(.system(size: 13))
-                        .lineLimit(showingOriginal ? nil : 3)
+                        .lineLimit(expanded ? nil : 3)
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(meta)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                meta
             }
             Spacer(minLength: 8)
             actions
-                .opacity(hovering || entry.status == .failed ? 1 : 0)
+                .opacity(hovering || entry.status == .failed || copied ? 1 : 0)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(hovering ? Color.primary.opacity(0.03) : .clear)
         .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } }
         .onHover { hovering = $0 }
         .contextMenu {
             if entry.status == .done {
                 Button("Copy") { TextInserter.copy(entry.text) }
-                if entry.original != nil { Button("Copy Original") { TextInserter.copy(entry.original!) } }
+                if let original = entry.original { Button("Copy Original") { TextInserter.copy(original) } }
             }
             Button("Delete", role: .destructive) { HistoryStore.shared.delete(entry) }
         }
     }
 
-    private var meta: String {
-        let time = entry.date.formatted(date: .omitted, time: .shortened)
-        let seconds = Int(entry.duration.rounded())
-        let duration = String(format: "%d:%02d", seconds / 60, seconds % 60)
-        let mode = DictationMode(rawValue: entry.mode)?.title ?? entry.mode
-        var parts = [time, duration, mode, entry.language.uppercased()]
-        if let app = entry.app { parts.insert(app, at: 1) }
-        if entry.original != nil { parts.append(showingOriginal ? "original" : "rewritten") }
-        return parts.joined(separator: " · ")
+    @ViewBuilder
+    private var icon: some View {
+        Group {
+            if entry.status == .failed {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            } else {
+                Image(nsImage: AppIcons.icon(for: entry.appBundleID, name: entry.app)).resizable()
+                    .opacity(entry.app == nil ? 0.5 : 1)
+            }
+        }
+        .frame(width: 24, height: 24)
     }
+
+    private var meta: some View {
+        let seconds = Int(entry.duration.rounded())
+        return HStack(spacing: 6) {
+            Text(entry.date.formatted(date: .omitted, time: .shortened))
+            if let app = entry.app { dot; Text(app) }
+            if seconds > 0 { dot; Text(String(format: "%d:%02d", seconds / 60, seconds % 60)).monospacedDigit() }
+            dot
+            Text(SpeechLanguage.flag(for: entry.language)).font(.system(size: 11)).help(SpeechLanguage.name(for: entry.language))
+            if entry.mode == DictationMode.rewrite.rawValue {
+                Chip("Rewrite").scaleEffect(0.92)
+            }
+            if entry.original != nil {
+                Button(showingOriginal ? "Show Rewrite" : "Show Original") { showingOriginal.toggle() }
+                    .buttonStyle(.link)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+    }
+
+    private var dot: some View { Text("·").foregroundStyle(.tertiary) }
 
     @ViewBuilder
     private var actions: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             if entry.status == .failed {
                 if retrying {
                     ProgressView().controlSize(.small)
@@ -132,14 +265,16 @@ private struct HistoryRow: View {
                             retrying = false
                         }
                     }
+                    .controlSize(.small)
                 }
             } else {
-                if entry.original != nil {
-                    iconButton(showingOriginal ? "wand.and.stars" : "arrow.uturn.backward",
-                               help: showingOriginal ? "Show rewrite" : "Show original") { showingOriginal.toggle() }
-                }
-                iconButton("doc.on.doc", help: "Copy") {
+                iconButton(copied ? "checkmark" : "doc.on.doc", help: "Copy") {
                     TextInserter.copy(showingOriginal ? (entry.original ?? entry.text) : entry.text)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.4))
+                        copied = false
+                    }
                 }
             }
             iconButton("trash", help: "Delete") { HistoryStore.shared.delete(entry) }
@@ -147,8 +282,11 @@ private struct HistoryRow: View {
     }
 
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 22, height: 22) }
-            .buttonStyle(.borderless)
-            .help(help)
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12)).frame(width: 24, height: 24)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help(help)
     }
 }

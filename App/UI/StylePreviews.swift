@@ -219,11 +219,6 @@ private struct WaveformCard: View {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
                         }
                     }
-                    Text(style.summary)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2, reservesSpace: true)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 2)
             }
@@ -235,6 +230,7 @@ private struct WaveformCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .help(style.summary)
         .accessibilityLabel("\(style.title) waveform")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }

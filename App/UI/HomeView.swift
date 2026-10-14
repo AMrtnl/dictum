@@ -119,34 +119,64 @@ struct HomeView: View {
 
     // MARK: Breakdown
 
-    private var breakdown: some View {
-        let apps = UsageStats.topApps(history.entries, in: period)
-        let languages = UsageStats.languages(history.entries, in: period)
-        return HStack(alignment: .top, spacing: 40) {
-            VStack(alignment: .leading, spacing: 14) {
-                SectionTitle("Where your words go")
-                if apps.isEmpty {
-                    Text("The apps you dictate into show up here.").font(.system(size: 12)).foregroundStyle(.secondary)
-                } else {
-                    AppShareList(apps: apps)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+    @State private var breakdownTab = 0
 
-            VStack(alignment: .leading, spacing: 26) {
-                if !languages.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionTitle("Languages")
-                        LanguageSplit(languages: languages)
+    private var breakdown: some View {
+        let apps = UsageStats.topApps(history.entries, in: period, limit: 6)
+        let languages = UsageStats.languages(history.entries, in: period)
+        let mostWords = Double(max(apps.first?.words ?? 0, 1))
+        return HStack(alignment: .top, spacing: 14) {
+            DashCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        TabStrip(tabs: ["Apps", "Languages"], selection: $breakdownTab)
+                        Spacer()
+                        Text(breakdownTab == 0 ? "Words" : "Dictations")
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    }
+                    VStack(spacing: 4) {
+                        if breakdownTab == 0 {
+                            if apps.isEmpty {
+                                emptyRow("The apps you dictate into show up here.")
+                            }
+                            ForEach(apps, id: \.name) { app in
+                                BarRow(label: app.name, value: Self.compact(app.words),
+                                       fraction: Double(app.words) / mostWords) {
+                                    Image(nsImage: AppIcons.icon(for: app.bundleID, name: app.name)).resizable()
+                                }
+                            }
+                        } else {
+                            let top = languages.first?.share ?? 1
+                            ForEach(languages.prefix(6), id: \.code) { language in
+                                BarRow(label: SpeechLanguage.name(for: language.code),
+                                       value: "\(Int((language.share * 100).rounded())) %",
+                                       fraction: language.share / top) {
+                                    FlagIcon(code: language.code)
+                                }
+                            }
+                        }
                     }
                 }
+            }
+            .frame(maxWidth: .infinity)
+
+            DashCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionTitle("When you dictate")
+                    Text("When you dictate").font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 9).padding(.vertical, 4)
                     HourStrip(counts: UsageStats.hours(history.entries, in: period))
                 }
             }
-            .frame(width: 260, alignment: .leading)
+            .frame(width: 290)
         }
+    }
+
+    private func emptyRow(_ text: String) -> some View {
+        Text(text).font(.system(size: 12)).foregroundStyle(.secondary).padding(8)
+    }
+
+    static func compact(_ value: Int) -> String {
+        value >= 10_000 ? value.formatted(.number.notation(.compactName)) : value.formatted()
     }
 
     // MARK: Latest

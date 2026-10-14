@@ -140,6 +140,25 @@ enum SpeechLanguage: String, CaseIterable, Identifiable {
     var title: String {
         Locale(identifier: "en").localizedString(forLanguageCode: rawValue)?.capitalized ?? rawValue
     }
+
+    /// The flag most people associate with the language.
+    var flag: String { Self.flag(for: rawValue) }
+
+    /// Flag for any language code the speech models report ("en", "fr-FR", "ru"…).
+    static func flag(for code: String) -> String {
+        let flags = ["en": "🇬🇧", "fr": "🇫🇷", "de": "🇩🇪", "es": "🇪🇸", "it": "🇮🇹", "pt": "🇵🇹", "nl": "🇳🇱",
+                     "pl": "🇵🇱", "el": "🇬🇷", "ar": "🇸🇦", "ja": "🇯🇵", "ko": "🇰🇷", "zh": "🇨🇳", "vi": "🇻🇳",
+                     "ru": "🇷🇺", "uk": "🇺🇦", "tr": "🇹🇷", "sv": "🇸🇪", "da": "🇩🇰", "fi": "🇫🇮", "no": "🇳🇴",
+                     "cs": "🇨🇿", "hu": "🇭🇺", "ro": "🇷🇴", "hi": "🇮🇳", "id": "🇮🇩", "th": "🇹🇭", "he": "🇮🇱"]
+        return flags[String(code.prefix(2)).lowercased()] ?? "🌐"
+    }
+
+    /// The name for any reported language code.
+    static func name(for code: String) -> String {
+        SpeechLanguage(rawValue: code).map(\.title)
+            ?? Locale(identifier: "en").localizedString(forLanguageCode: String(code.prefix(2)))?.capitalized
+            ?? code.uppercased()
+    }
 }
 
 /// User preferences, persisted in UserDefaults.

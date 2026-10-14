@@ -101,6 +101,7 @@ extension WindowManager {
             ("models", AnyView(ModelSettings().frame(width: 760, height: 1180))),
             ("history", AnyView(HistoryPage().frame(width: 760, height: 520))),
             ("training", AnyView(TrainingDataView().frame(width: 760, height: 760))),
+            ("vocabulary-cards", AnyView(VocabularyCardsSample().frame(width: 760))),
         ]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
@@ -114,7 +115,7 @@ extension WindowManager {
                 window.contentView = host
                 window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
                 window.orderFrontRegardless()
-                RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+                RunLoop.main.run(until: Date().addingTimeInterval(1.2))
                 if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                     host.cacheDisplay(in: host.bounds, to: rep)
                     let suffix = appearance == .darkAqua ? "dark" : "light"
