@@ -10,11 +10,11 @@ struct PageScroll<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 30) { content }
-                .padding(.horizontal, 34)
-                .padding(.top, 26)
+            VStack(alignment: .leading, spacing: 28) { content }
+                .padding(.horizontal, 32)
+                .padding(.top, 24)
                 .padding(.bottom, 30)
-                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: 820, alignment: .leading)
         }
     }
 }
@@ -226,11 +226,16 @@ struct FlagIcon: View {
 
 // MARK: - Liquid Glass
 
+/// Off only for the debug snapshot renderer, which can't draw glass (it draws the fallback).
+enum GlassPolicy {
+    static var enabled = true
+}
+
 extension View {
     /// Liquid Glass (macOS 26 and later) in a rounded shape; a quiet card fill before that.
     @ViewBuilder
     func glassSurface(cornerRadius: CGFloat, tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(macOS 26, *) {
+        if #available(macOS 26, *), GlassPolicy.enabled {
             glassEffect(Glass.regular.tint(tint).interactive(interactive),
                         in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
@@ -242,10 +247,89 @@ extension View {
     /// Glass buttons on macOS 26 and later (prominent for the main action); bordered before.
     @ViewBuilder
     func glassButton(prominent: Bool = false) -> some View {
-        if #available(macOS 26, *) {
+        if #available(macOS 26, *), GlassPolicy.enabled {
             if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
         } else {
             if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
         }
+    }
+}
+
+// MARK: - Page header and pill switch
+
+extension Color {
+    /// The raised pill of a PillPicker: white in light mode, a lighter gray in dark mode.
+    static let pillSelection = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.16) : NSColor.white
+    })
+}
+
+/// The top of every page: a large title, a line on what the page is for, and an optional
+/// control on the right.
+struct PageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    @ViewBuilder var trailing: Trailing
+
+    init(_ title: String, subtitle: String? = nil, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 26, weight: .bold))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            trailing
+        }
+    }
+}
+
+/// A few options in a soft track; the chosen one sits on a raised pill that slides to it.
+/// Replaces segmented controls and tab strips everywhere, so every switch looks the same.
+struct PillPicker<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    @Binding var selection: Value
+    @Namespace private var namespace
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                let selected = option.value == selection
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selection = option.value }
+                } label: {
+                    Text(option.title)
+                        .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 11)
+                        .frame(height: 24)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(Color.pillSelection)
+                                    .shadow(color: .black.opacity(0.14), radius: 1.5, y: 0.5)
+                                    .matchedGeometryEffect(id: "selection", in: namespace)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
     }
 }

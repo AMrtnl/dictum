@@ -90,6 +90,7 @@ extension WindowManager {
     /// Renders each window's content offscreen to PNGs for design review, in light and dark:
     /// `open Dictum.app --args -snapshotUI /path/to/dir`
     func snapshot(to directory: URL) {
+        GlassPolicy.enabled = false
         let views: [(String, AnyView)] = [
             ("onboarding", AnyView(OnboardingView())),
             ("main", AnyView(MainWindowView().frame(width: 940, height: 660))),

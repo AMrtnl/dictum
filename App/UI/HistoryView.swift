@@ -74,10 +74,10 @@ struct HistoryView: View {
                     }
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 22)
-            .padding(.bottom, 28)
-            .frame(maxWidth: 860, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.top, 24)
+            .padding(.bottom, 30)
+            .frame(maxWidth: 820, alignment: .leading)
         }
         .confirmationDialog("Clear all saved dictations?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { history.clear() }
@@ -91,12 +91,8 @@ struct HistoryView: View {
     private var header: some View {
         let done = history.entries.filter { $0.status == .done }
         let words = done.reduce(0) { $0 + UsageStats.words(in: $1.text) }
-        return HStack(alignment: .center, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 18) {
-                figure(done.count.formatted(), done.count == 1 ? "dictation" : "dictations")
-                figure(words.formatted(), "words")
-            }
-            Spacer()
+        let subtitle = "\(done.count.formatted()) dictation\(done.count == 1 ? "" : "s") · \(words.formatted()) words, kept as text on this Mac"
+        return PageHeader("History", subtitle: settings.saveHistory ? subtitle : "History is off. New dictations aren't kept.") {
             Toggle("Keep history", isOn: $settings.saveHistory)
                 .toggleStyle(.switch)
                 .controlSize(.small)
@@ -114,16 +110,9 @@ struct HistoryView: View {
         }
     }
 
-    private func figure(_ value: String, _ label: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Text(value).font(.system(size: 22, weight: .bold))
-            Text(label).font(.system(size: 13)).foregroundStyle(.secondary)
-        }
-    }
-
     private var controls: some View {
         HStack(spacing: 12) {
-            TabStrip(tabs: Filter.allCases.map(\.title), selection: $filter)
+            PillPicker(options: Filter.allCases.map { (value: $0.rawValue, title: $0.title) }, selection: $filter)
             Spacer()
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
@@ -135,9 +124,9 @@ struct HistoryView: View {
                         .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Capsule().fill(Color.primary.opacity(0.06)))
         }
     }
 

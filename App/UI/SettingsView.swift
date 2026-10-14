@@ -17,7 +17,11 @@ struct ConfigurationPage: View {
                 }
                 .help(settings.shortcutBehavior.summary)
             } header: {
-                Text("Shortcuts")
+                VStack(alignment: .leading, spacing: 22) {
+                    PageHeader("Configuration", subtitle: "Shortcuts, the recording window, languages and pasting.")
+                        .foregroundStyle(.primary)
+                    Text("Shortcuts")
+                }
             } footer: {
                 Text("Esc cancels.")
             }
@@ -177,7 +181,11 @@ struct SoundPage: View {
                     Text("Allow microphone access first, in About.").font(.callout).foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Input")
+                VStack(alignment: .leading, spacing: 22) {
+                    PageHeader("Sound", subtitle: "The microphone Dictum listens to, and its sounds.")
+                        .foregroundStyle(.primary)
+                    Text("Input")
+                }
             }
             Section("Feedback") {
                 Toggle("Play start and stop sounds", isOn: $settings.playSounds)
@@ -222,7 +230,7 @@ struct ModesPage: View {
 
     var body: some View {
         PageScroll {
-            PageLead(Text("Choose what \(Text(DictationController.keys(for: .pushToTalk).joined()).fontWeight(.semibold).foregroundStyle(.primary)) does."))
+            PageHeader("Modes", subtitle: "Choose what \(DictationController.keys(for: .pushToTalk).joined()) does.")
             HStack(alignment: .top, spacing: 14) {
                 ModeCard(mode: .dictation, selected: settings.mode == .dictation) { settings.mode = .dictation }
                 ModeCard(mode: .rewrite, selected: settings.mode == .rewrite) { settings.mode = .rewrite }
@@ -362,7 +370,7 @@ struct ModelSettings: View {
 
     var body: some View {
         PageScroll {
-            PageLead("All models run on this Mac. Nothing you say leaves it.")
+            PageHeader("Models", subtitle: "All models run on this Mac. Nothing you say leaves it.")
 
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(SpeechModel.allCases) { model in

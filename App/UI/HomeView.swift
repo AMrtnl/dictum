@@ -24,10 +24,10 @@ struct HomeView: View {
                 if steps.contains(where: { !$0.done }) { getStarted }
                 whatsNew
             }
-            .padding(.horizontal, 34)
-            .padding(.top, 26)
+            .padding(.horizontal, 32)
+            .padding(.top, 24)
             .padding(.bottom, 30)
-            .frame(maxWidth: 800, alignment: .leading)
+            .frame(maxWidth: 820, alignment: .leading)
         }
     }
 
@@ -38,18 +38,12 @@ struct HomeView: View {
     private var summary: some View {
         let stats = UsageStats(history.entries, period: period)
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
-                Text(heading).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Picker("Period", selection: $period) {
-                    ForEach(Self.periods) { Text($0.shortTitle).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+            PageHeader("Home", subtitle: heading) {
+                PillPicker(options: Self.periods.map { (value: $0, title: $0.shortTitle) }, selection: $period)
             }
+            .padding(.bottom, 12)
             headline(stats)
-                .font(.system(size: 24, weight: .regular))
+                .font(.system(size: 21, weight: .regular))
                 .fixedSize(horizontal: false, vertical: true)
             if let detail = detail(stats) {
                 detail

@@ -11,7 +11,7 @@ struct TrainingDataView: View {
 
     var body: some View {
         PageScroll {
-            PageLead("Recordings and their transcripts, to teach a speech model your voice. They stay on this Mac.") {
+            PageHeader("Training data", subtitle: "Recordings and their transcripts, to teach a speech model your voice. They stay on this Mac.") {
                 Toggle("Save recordings", isOn: $settings.saveTrainingData)
                     .toggleStyle(.switch)
                     .labelsHidden()

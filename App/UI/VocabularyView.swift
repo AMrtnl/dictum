@@ -1,105 +1,101 @@
 import SwiftUI
 
-/// Words Dictum should always spell your way: add one at the top; below, a card per word
-/// with how it gets misheard and how often it shows up in your dictations.
+/// Vocabulary, laid out like the replacement tables of dictation and transcription apps
+/// (Heidi's "Instead of → Do this", VEED's "Find → Replace"): one field to add a word,
+/// then a table of what Dictum hears and what it writes instead.
 struct VocabularyView: View {
     @Bindable private var vocabulary = VocabularyStore.shared
     private let history = HistoryStore.shared
-    @State private var word = ""
-    @State private var heardAs = ""
-    @FocusState private var wordFocused: Bool
+    @State private var newWord = ""
+    @FocusState private var addFocused: Bool
+
+    private var canAdd: Bool { !newWord.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         let uses = Self.uses(of: vocabulary.terms.map(\.word), in: history.entries)
         PageScroll {
-            PageLead("Names, brands and jargon Dictum should always spell your way.")
+            PageHeader("Vocabulary", subtitle: "Names, brands and jargon Dictum should always spell your way.")
 
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 17))
-                        .foregroundStyle(Color.accentColor)
-                    TextField("Word", text: $word, prompt: Text("New word"))
-                        .font(.system(size: 15, weight: .semibold))
-                        .focused($wordFocused)
-                        .frame(width: 170)
-                    Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 20)
-                    Image(systemName: "ear")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .help("How the speech model mishears it, separated by commas")
-                    TextField("Heard as", text: $heardAs, prompt: Text("misheard as… (optional)"))
-                        .font(.system(size: 14))
-                    Button("Add", action: add)
-                        .glassButton(prominent: true)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .textFieldStyle(.plain)
-                .labelsHidden()
-                .onSubmit(add)
-                .padding(.leading, 14)
-                .padding(.trailing, 6)
-                .padding(.vertical, 7)
-                .glassSurface(cornerRadius: 24, interactive: true)
-
-                if !word.trimmingCharacters(in: .whitespaces).isEmpty {
-                    preview
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 16)
-                        .transition(.opacity)
-                }
-            }
-            .animation(.easeOut(duration: 0.15), value: word.isEmpty)
-
-            if vocabulary.terms.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Image(systemName: "character.book.closed").font(.system(size: 24)).foregroundStyle(.tertiary)
-                        .padding(.bottom, 4)
-                    Text("No words yet").font(.system(size: 14, weight: .semibold))
+            VStack(alignment: .leading, spacing: 16) {
+                addField
+                if vocabulary.terms.isEmpty {
                     Text("Add a colleague's name or an app you use every day, then dictate it.")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        SectionTitle(vocabulary.terms.count == 1 ? "1 word" : "\(vocabulary.terms.count) words")
-                        let total = uses.values.reduce(0, +)
-                        if total > 0 {
-                            Text("· \(total) in your dictations").font(.system(size: 12)).foregroundStyle(.secondary)
-                        }
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], alignment: .leading, spacing: 12) {
-                        ForEach($vocabulary.terms) { $term in
-                            TermCard(term: $term, uses: uses[term.word.lowercased()] ?? 0) {
-                                vocabulary.terms.removeAll { $0.id == term.id }
-                            }
-                        }
-                    }
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 2)
+                } else {
+                    table(uses: uses)
+                    Text("Qwen3 also listens for these words while you speak.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 2)
                 }
             }
         }
     }
 
-    /// What the new word will do, as you type it.
-    private var preview: Text {
-        let target = Text(word.trimmingCharacters(in: .whitespaces)).fontWeight(.semibold).foregroundStyle(.primary)
-        let spellings = Self.split(heardAs)
-        guard !spellings.isEmpty else { return Text("Dictum will always write \(target).") }
-        let heard = spellings.map { Text($0).strikethrough() }.reduce(Text("")) { list, item in
-            list == Text("") ? item : Text("\(list), \(item)")
+    /// One filled field with the add button inside it, like most "add a word" screens.
+    private var addField: some View {
+        HStack(spacing: 8) {
+            TextField("New word", text: $newWord, prompt: Text("Add a word or name…"))
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($addFocused)
+                .onSubmit(add)
+            Button(action: add) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(canAdd ? Color.accentColor : Color.secondary.opacity(0.35)))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canAdd)
+            .help("Add")
         }
-        return Text("Dictum will write \(target) when it hears \(heard).")
+        .padding(.leading, 14)
+        .padding(.trailing, 7)
+        .frame(height: 40)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(addFocused ? Color.accentColor.opacity(0.7) : .clear, lineWidth: 1.5))
+        .frame(maxWidth: 520)
     }
+
+    private func table(uses: [String: Int]) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Heard as").frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(width: 12)
+                Text("Written as").frame(width: Self.wordColumn, alignment: .leading)
+                Text("Used").frame(width: 44, alignment: .trailing)
+                Color.clear.frame(width: 24)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .frame(height: 30)
+            .background(Color.primary.opacity(0.04))
+
+            ForEach($vocabulary.terms) { $term in
+                Divider()
+                ReplacementRow(term: $term, uses: uses[term.word.lowercased()] ?? 0) {
+                    vocabulary.terms.removeAll { $0.id == term.id }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.cardBorder))
+    }
+
+    static let wordColumn: CGFloat = 210
 
     private func add() {
-        let trimmed = word.trimmingCharacters(in: .whitespaces)
+        let trimmed = newWord.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        vocabulary.terms.insert(VocabularyTerm(word: trimmed, heardAs: Self.split(heardAs)), at: 0)
-        word = ""
-        heardAs = ""
-        wordFocused = true
+        vocabulary.terms.insert(VocabularyTerm(word: trimmed, heardAs: []), at: 0)
+        newWord = ""
+        addFocused = true
     }
 
     static func split(_ text: String) -> [String] {
@@ -121,96 +117,73 @@ struct VocabularyView: View {
     }
 }
 
-/// One word: the spelling Dictum writes, the spellings it replaces, how often it's used.
-private struct TermCard: View {
+/// One row: the misheard spellings, the word Dictum writes, how often it's used. Both
+/// text cells edit in place; delete shows on hover.
+private struct ReplacementRow: View {
     @Binding var term: VocabularyTerm
     let uses: Int
     let remove: () -> Void
     @State private var hovering = false
-    @State private var editing = false
 
     var body: some View {
-        DashCard(padding: 14) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(term.word).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                    Spacer(minLength: 6)
-                    if hovering {
-                        Button { editing = true } label: { Image(systemName: "pencil") }
-                            .buttonStyle(.borderless).foregroundStyle(.secondary).help("Edit")
-                        Button(action: remove) { Image(systemName: "trash") }
-                            .buttonStyle(.borderless).foregroundStyle(.secondary).help("Remove")
-                    } else {
-                        Text(uses == 0 ? "Not used yet" : "\(uses)×")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(uses == 0 ? Color.secondary : Color.accentColor)
-                            .help(uses == 0 ? "Not in your saved dictations yet" : "Appears \(uses) times in your saved dictations")
-                    }
-                }
-                if term.heardAs.isEmpty {
-                    Text("Written exactly like this").font(.system(size: 12)).foregroundStyle(.tertiary)
-                } else {
-                    FlowLayout(spacing: 5) {
-                        ForEach(term.heardAs, id: \.self) { spelling in
-                            Text(spelling)
-                                .strikethrough(color: .secondary)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.primary.opacity(0.06)))
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 58, alignment: .top)
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { editing = true }
-        .popover(isPresented: $editing, arrowEdge: .bottom) {
-            TermEditor(term: $term)
-        }
-    }
-}
-
-private struct TermEditor: View {
-    @Binding var term: VocabularyTerm
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Word").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            TextField("Word", text: $term.word).textFieldStyle(.roundedBorder)
-            Text("Heard as, separated by commas").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        HStack(spacing: 12) {
             TextField("Heard as", text: Binding(
                 get: { term.heardAs.joined(separator: ", ") },
                 set: { term.heardAs = VocabularyView.split($0) }
-            ))
-            .textFieldStyle(.roundedBorder)
+            ), prompt: Text("Misheard spellings, optional"))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 12)
+            TextField("Written as", text: $term.word)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: VocabularyView.wordColumn, alignment: .leading)
+            Text(uses == 0 ? "–" : "\(uses)×")
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+                .help(uses == 0 ? "Not in your saved dictations yet" : "Appears \(uses) times in your saved dictations")
+            Button(action: remove) {
+                Image(systemName: "trash").font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(hovering ? Color.red : Color.secondary)
+            .opacity(hovering ? 1 : 0)
+            .frame(width: 24)
+            .help("Remove")
         }
+        .textFieldStyle(.plain)
         .labelsHidden()
-        .padding(14)
-        .frame(width: 280)
+        .font(.system(size: 13))
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .background(hovering ? Color.primary.opacity(0.03) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 
 #if DEBUG
-/// Snapshot-only: the word cards with sample words, without touching the real vocabulary.
+/// Snapshot-only: table rows with sample words, without touching the real vocabulary.
 struct VocabularyCardsSample: View {
     @State private var terms = [
         VocabularyTerm(word: "Ghostty", heardAs: ["ghosty", "ghost tea"]),
-        VocabularyTerm(word: "Qwen3", heardAs: ["queen three", "quen 3"]),
+        VocabularyTerm(word: "Qwen3", heardAs: ["queen three"]),
         VocabularyTerm(word: "Martinoli", heardAs: []),
-        VocabularyTerm(word: "Discio", heardAs: ["disco", "dizzio"]),
     ]
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], alignment: .leading, spacing: 12) {
+        VStack(spacing: 0) {
             ForEach($terms) { $term in
-                TermCard(term: $term, uses: term.word == "Ghostty" ? 14 : term.word == "Qwen3" ? 3 : 0) {}
+                Divider()
+                ReplacementRow(term: $term, uses: term.word == "Ghostty" ? 14 : 0) {}
             }
         }
         .padding(30)
+        .frame(width: 700)
     }
 }
 #endif

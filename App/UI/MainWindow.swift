@@ -14,7 +14,7 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
         case .vocabulary: "Vocabulary"
         case .configuration: "Configuration"
         case .sound: "Sound"
-        case .models: "Models library"
+        case .models: "Models"
         case .history: "History"
         case .training: "Training data"
         case .about: "About"
@@ -23,15 +23,15 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .home: "house.fill"
-        case .modes: "sparkle"
-        case .vocabulary: "book.closed.fill"
-        case .configuration: "gearshape.fill"
-        case .sound: "speaker.wave.2.fill"
-        case .models: "books.vertical.fill"
-        case .history: "clock.arrow.circlepath"
+        case .home: "house"
+        case .modes: "sparkles"
+        case .vocabulary: "character.book.closed"
+        case .configuration: "slider.horizontal.3"
+        case .sound: "mic"
+        case .models: "cpu"
+        case .history: "clock"
         case .training: "waveform.badge.plus"
-        case .about: "info.circle.fill"
+        case .about: "info.circle"
         }
     }
 
@@ -45,8 +45,12 @@ enum MainPage: String, Hashable, CaseIterable, Identifiable {
         }
     }
 
-    /// Sidebar groups, separated by space like superwhisper's.
-    static let groups: [[MainPage]] = [[.home], [.modes, .vocabulary], [.configuration, .sound, .models], [.history, .training]]
+    /// Sidebar sections: what you said, how Dictum writes it, how it's set up.
+    static let groups: [(title: String?, pages: [MainPage])] = [
+        (nil, [.home, .history]),
+        ("Dictation", [.modes, .vocabulary, .models]),
+        ("Settings", [.configuration, .sound, .training]),
+    ]
 }
 
 /// Which page the main window shows; set before opening it to deep-link.
@@ -67,6 +71,7 @@ struct MainWindowView: View {
         } detail: {
             detail
                 .navigationTitle(navigation.page.title)
+                .hidingToolbarTitle()  // every page shows its own large title
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) { MicrophoneMenu() }
                 }
@@ -98,14 +103,11 @@ private struct Sidebar: View {
             List(selection: $selection) {
                 ForEach(Array(MainPage.groups.enumerated()), id: \.offset) { _, group in
                     Section {
-                        ForEach(group) { page in
-                            Label {
-                                Text(page.title)
-                            } icon: {
-                                SidebarIcon(symbol: page.symbol, tint: page.tint)
-                            }
-                            .tag(page)
+                        ForEach(group.pages) { page in
+                            Label(page.title, systemImage: page.symbol).tag(page)
                         }
+                    } header: {
+                        if let title = group.title { Text(title) }
                     }
                 }
             }
@@ -115,6 +117,14 @@ private struct Sidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
         }
+    }
+}
+
+private extension View {
+    /// The window keeps its title (Window menu, Mission Control) without repeating it in the toolbar.
+    @ViewBuilder
+    func hidingToolbarTitle() -> some View {
+        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
     }
 }
 
