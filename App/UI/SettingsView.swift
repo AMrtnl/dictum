@@ -93,6 +93,7 @@ struct ConfigurationPage: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { UserDefaults.standard.set(true, forKey: "visitedConfiguration") }  // Home's Get started
     }
 }
 

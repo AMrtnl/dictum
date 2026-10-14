@@ -21,14 +21,68 @@ struct UsageStats {
             switch self {
             case .allTime: return nil
             case .today: return calendar.startOfDay(for: .now)
-            case .week: return calendar.date(byAdding: .day, value: -7, to: .now)
-            case .month: return calendar.date(byAdding: .day, value: -30, to: .now)
+            // Calendar days including today, so the chart's highlighted bars match the totals.
+            case .week: return calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: .now))
+            case .month: return calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: .now))
             }
         }
+
+        var shortTitle: String {
+            switch self {
+            case .allTime: "All"
+            case .today: "Today"
+            case .week: "7 days"
+            case .month: "30 days"
+            }
+        }
+
+        func contains(_ date: Date) -> Bool { start.map { date >= $0 } ?? true }
+    }
+
+    /// One day of dictation, for the rhythm chart.
+    struct Day: Identifiable {
+        let date: Date
+        let words: Int
+        let dictations: Int
+        let seconds: Double
+        var id: Date { date }
     }
 
     /// Typing speed the time-saved figure compares against.
     static let typingWPM = 40.0
+
+    static func words(in text: String) -> Int { text.split(whereSeparator: \.isWhitespace).count }
+
+    /// Successful dictations in the period, newest first.
+    static func done(_ entries: [HistoryEntry], in period: Period) -> [HistoryEntry] {
+        entries.filter { $0.status == .done && period.contains($0.date) }
+    }
+
+    /// The last `count` days, oldest first, empty days included.
+    static func days(_ entries: [HistoryEntry], count: Int = 30) -> [Day] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        var totals: [Date: (words: Int, dictations: Int, seconds: Double)] = [:]
+        for entry in entries where entry.status == .done {
+            let day = calendar.startOfDay(for: entry.date)
+            let current = totals[day] ?? (0, 0, 0)
+            totals[day] = (current.words + words(in: entry.text), current.dictations + 1, current.seconds + entry.duration)
+        }
+        return (0..<count).reversed().compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            let total = totals[day] ?? (0, 0, 0)
+            return Day(date: day, words: total.words, dictations: total.dictations, seconds: total.seconds)
+        }
+    }
+
+    /// Dictations per hour of the day (0–23) in the period.
+    static func hours(_ entries: [HistoryEntry], in period: Period) -> [Int] {
+        var counts = [Int](repeating: 0, count: 24)
+        for entry in done(entries, in: period) {
+            counts[Calendar.current.component(.hour, from: entry.date)] += 1
+        }
+        return counts
+    }
 
     let words: Int
     let wordsPerMinute: Int
@@ -55,22 +109,9 @@ struct UsageStats {
         minutesSaved = max(0, Double(words) / Self.typingWPM - spokenSeconds / 60)
     }
 
-    /// Words per day for the last `days` days, oldest first (empty days included).
-    static func daily(_ entries: [HistoryEntry], days: Int = 14) -> [(day: Date, words: Int)] {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: .now)
-        var totals: [Date: Int] = [:]
-        for entry in entries where entry.status == .done {
-            totals[calendar.startOfDay(for: entry.date), default: 0] += entry.text.split(whereSeparator: \.isWhitespace).count
-        }
-        return (0..<days).reversed().compactMap { offset in
-            calendar.date(byAdding: .day, value: -offset, to: today).map { ($0, totals[$0] ?? 0) }
-        }
-    }
-
-    /// Share of dictations per language, largest first.
-    static func languages(_ entries: [HistoryEntry]) -> [(code: String, share: Double)] {
-        let done = entries.filter { $0.status == .done }
+    /// Share of dictations per language in the period, largest first.
+    static func languages(_ entries: [HistoryEntry], in period: Period = .allTime) -> [(code: String, share: Double)] {
+        let done = done(entries, in: period)
         guard !done.isEmpty else { return [] }
         let counts = Dictionary(grouping: done, by: \.language).mapValues(\.count)
         return counts.map { ($0.key, Double($0.value) / Double(done.count)) }.sorted { $0.share > $1.share }
@@ -81,18 +122,19 @@ struct UsageStats {
         ["loginwindow", "Dictum", "ScreenSaverEngine", "UserNotificationCenter", "Dock"].contains(app)
     }
 
-    /// Apps dictated into most, with their bundle IDs for icons.
-    static func topApps(_ entries: [HistoryEntry], limit: Int = 4) -> [(name: String, bundleID: String?, count: Int)] {
-        var counts: [String: (bundleID: String?, count: Int)] = [:]
-        for entry in entries where entry.status == .done {
+    /// Apps dictated into most in the period, with their bundle IDs for icons.
+    static func topApps(_ entries: [HistoryEntry], in period: Period = .allTime,
+                        limit: Int = 5) -> [(name: String, bundleID: String?, count: Int, words: Int)] {
+        var totals: [String: (bundleID: String?, count: Int, words: Int)] = [:]
+        for entry in done(entries, in: period) {
             guard let app = entry.app, !Self.isSystemProcess(app) else { continue }
-            let current = counts[app] ?? (entry.appBundleID, 0)
-            counts[app] = (current.bundleID ?? entry.appBundleID, current.count + 1)
+            let current = totals[app] ?? (entry.appBundleID, 0, 0)
+            totals[app] = (current.bundleID ?? entry.appBundleID, current.count + 1, current.words + words(in: entry.text))
         }
-        let ranked: [(name: String, bundleID: String?, count: Int)] = counts.map { name, value in
-            (name: name, bundleID: value.bundleID, count: value.count)
+        let ranked = totals.map { name, value in
+            (name: name, bundleID: value.bundleID, count: value.count, words: value.words)
         }
-        return Array(ranked.sorted { $0.count > $1.count }.prefix(limit))
+        return Array(ranked.sorted { $0.words > $1.words }.prefix(limit))
     }
 
     var savedDescription: String {

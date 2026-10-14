@@ -1,266 +1,397 @@
-import Charts
 import SwiftUI
 
-/// Dashboard: usage stats, a get-started checklist and what's new.
+/// Home: what you've said lately, where it went, and what's left to set up.
 struct HomeView: View {
     private let history = HistoryStore.shared
     private let permissions = Permissions.shared
-    @State private var period = UsageStats.Period.allTime
+    private let vocabulary = VocabularyStore.shared
+    @AppStorage("homePeriod") private var period: UsageStats.Period = .week
 
-    private static let changes: [(date: String, title: String, detail: String)] = [
-        ("Oct 8", "Faster after you stop talking",
-         "The speech model stays in memory, warms up as you start talking, and long dictations are transcribed while you speak. Redesigned recording windows and messages."),
-        ("Oct 7", "Hands-free, auto language, more models",
-         "Tap the shortcut to dictate hands-free, automatic English/French detection, training data, seven waveform styles and a new icon."),
-        ("Oct 7", "Home window and Vocabulary",
-         "A dashboard with your dictation stats, and custom vocabulary to fix how names and terms are written."),
-        ("Oct 6", "Sleeping pill",
-         "The small window rests as a thin pill, opens a toolbar on hover, and snaps to screen edges and corners."),
-        ("Oct 6", "Dictum 1.0",
-         "On-device dictation with Cohere Transcribe, and Rewrite mode with Tiny Aya."),
-    ]
+    private static let latestChange = (version: "1.4", title: "Faster after you stop talking",
+                                       detail: "The speech model stays in memory and long dictations are transcribed while you speak.")
+    private static let periods: [UsageStats.Period] = [.today, .week, .month, .allTime]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                if permissions.accessibility != .granted { pasteBanner }
-                stats
-                activity
-                getStarted
+            VStack(alignment: .leading, spacing: 34) {
+                if permissions.accessibility != .granted { PasteNotice() }
+                VStack(alignment: .leading, spacing: 22) {
+                    summary
+                    rhythm
+                }
+                if !periodEntries.isEmpty { breakdown }
+                if !latest.isEmpty { latestDictations }
+                if steps.contains(where: { !$0.done }) { getStarted }
                 whatsNew
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 22)
-            .frame(maxWidth: 820, alignment: .leading)
+            .padding(.horizontal, 34)
+            .padding(.top, 26)
+            .padding(.bottom, 30)
+            .frame(maxWidth: 800, alignment: .leading)
         }
     }
 
-    // MARK: Paste permission
+    private var periodEntries: [HistoryEntry] { UsageStats.done(history.entries, in: period) }
 
-    private var pasteBanner: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(.orange)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Auto-paste is off").font(.system(size: 14, weight: .semibold))
-                Text("macOS hasn't given Dictum Accessibility access, so transcripts are copied instead of pasted. Turn Dictum on in Privacy & Security → Accessibility.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Already on but still not pasting? macOS is holding an outdated entry: reset it, then switch Dictum on again.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button("Grant Access") { permissions.requestAccessibility() }
-                        .buttonStyle(.borderedProminent)
-                    Button("Reset Permission") { permissions.resetAccessibility() }
-                }
-                .padding(.top, 2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.orange.opacity(0.1)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.orange.opacity(0.35)))
-    }
+    // MARK: Summary
 
-    // MARK: Stats
-
-    private var stats: some View {
+    private var summary: some View {
         let stats = UsageStats(history.entries, period: period)
-        return VStack(alignment: .leading, spacing: 12) {
-            Picker("Period", selection: $period) {
-                ForEach(UsageStats.Period.allCases) { Text($0.title).tag($0) }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                Text(heading).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Picker("Period", selection: $period) {
+                    ForEach(Self.periods) { Text($0.shortTitle).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .buttonStyle(.borderless)
-            .font(.system(size: 15, weight: .semibold))
-
-            HStack(spacing: 0) {
-                stat(stats.wordsPerMinute > 0 ? "\(stats.wordsPerMinute) WPM" : "–", "Average speed")
-                stat(stats.words.formatted(), "Words")
-                stat("\(stats.appsUsed)", "Apps used")
-                stat(stats.savedDescription, "Saved \(period == .allTime ? "all time" : period.title.lowercased())",
-                     help: "Compared with typing at \(Int(UsageStats.typingWPM)) words per minute.")
+            headline(stats)
+                .font(.system(size: 24, weight: .regular))
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail = detail(stats) {
+                detail
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 18)
-            .padding(.horizontal, 20)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color.secondary.opacity(0.08)))
         }
     }
 
-    private func stat(_ value: String, _ label: String, help: String? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(value).font(.system(size: 20, weight: .semibold)).monospacedDigit()
-            HStack(spacing: 4) {
-                Text(label)
-                if help != nil { Image(systemName: "info.circle").imageScale(.small) }
-            }
-            .font(.system(size: 13))
-            .foregroundStyle(.secondary)
+    private var heading: String {
+        switch period {
+        case .today: "Today"
+        case .week: "This week"
+        case .month: "This month"
+        case .allTime: "Since you started"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(help ?? "")
     }
 
-    // MARK: Activity
+    private func headline(_ stats: UsageStats) -> Text {
+        if history.entries.isEmpty { return Text("Your words will show up here.") }
+        guard stats.dictations > 0 else {
+            return Text(period == .today ? "Nothing dictated yet today." : "Nothing dictated in this period.")
+        }
+        let words = Text(Self.count(stats.words, "word")).fontWeight(.semibold)
+        let dictations = Text(Self.count(stats.dictations, "dictation")).fontWeight(.semibold)
+        return Text("You dictated \(words) in \(dictations).")
+    }
 
-    private var activity: some View {
-        let daily = UsageStats.daily(history.entries)
-        let languages = UsageStats.languages(history.entries)
-        let apps = UsageStats.topApps(history.entries)
-        return HStack(alignment: .top, spacing: 18) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Words per day").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                Chart(daily, id: \.day) { item in
-                    BarMark(x: .value("Day", item.day, unit: .day), y: .value("Words", item.words))
-                        .foregroundStyle(Color.accentColor.gradient)
-                        .cornerRadius(3)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .day, count: 2)) { _ in
-                        AxisValueLabel(format: .dateTime.weekday(.narrow))
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) { _ in
-                        AxisGridLine().foregroundStyle(Color.secondary.opacity(0.15))
-                        AxisValueLabel()
-                    }
-                }
-                .frame(height: 120)
+    private func detail(_ stats: UsageStats) -> Text? {
+        if history.entries.isEmpty || stats.dictations == 0 {
+            let keys = DictationController.keys(for: .pushToTalk).joined()
+            return Text("Tap \(Text(keys).fontWeight(.semibold)) in any app, say something, and tap it again.")
+        }
+        var parts: [Text] = []
+        let minutes = Int(stats.minutesSaved.rounded())
+        if minutes >= 1 {
+            parts.append(Text("That's about \(Text(stats.savedDescription).foregroundStyle(.primary)) less typing."))
+        }
+        if stats.wordsPerMinute > 0 {
+            let times = Double(stats.wordsPerMinute) / UsageStats.typingWPM
+            let pace = times >= 1.3 ? ", \(times.formatted(.number.precision(.fractionLength(1)))) times typing speed" : ""
+            parts.append(Text("You speak \(Text("\(stats.wordsPerMinute) words a minute").foregroundStyle(.primary))\(pace)."))
+        }
+        guard var text = parts.first else { return nil }
+        for part in parts.dropFirst() { text = Text("\(text) \(part)") }
+        return text
+    }
+
+    private static func count(_ value: Int, _ noun: String) -> String {
+        "\(value.formatted()) \(noun)\(value == 1 ? "" : "s")"
+    }
+
+    // MARK: Rhythm
+
+    private var rhythm: some View {
+        let days = UsageStats.days(history.entries)
+        return VStack(alignment: .leading, spacing: 8) {
+            RhythmChart(days: days, period: period)
+            if let busiest = days.max(by: { $0.words < $1.words }), busiest.words > 0 {
+                Text("Busiest day: \(busiest.date.formatted(.dateTime.weekday(.wide).day().month(.wide))), \(busiest.words.formatted()) words")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: .infinity)
+        }
+    }
 
+    // MARK: Breakdown
+
+    private var breakdown: some View {
+        let apps = UsageStats.topApps(history.entries, in: period)
+        let languages = UsageStats.languages(history.entries, in: period)
+        return HStack(alignment: .top, spacing: 40) {
             VStack(alignment: .leading, spacing: 14) {
-                if !languages.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Languages").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                        ForEach(languages.prefix(3), id: \.code) { language in
-                            HStack(spacing: 8) {
-                                Text(SpeechLanguage(rawValue: language.code)?.title ?? language.code.uppercased())
-                                    .font(.system(size: 12))
-                                    .frame(width: 64, alignment: .leading)
-                                GeometryReader { proxy in
-                                    Capsule().fill(Color.secondary.opacity(0.15))
-                                        .overlay(alignment: .leading) {
-                                            Capsule().fill(Color.accentColor).frame(width: proxy.size.width * language.share)
-                                        }
-                                }
-                                .frame(height: 6)
-                                Text("\(Int((language.share * 100).rounded())) %")
-                                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
-                                    .frame(width: 36, alignment: .trailing)
-                            }
-                        }
-                    }
-                }
-                if !apps.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Top apps").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                        ForEach(apps, id: \.name) { app in
-                            HStack(spacing: 8) {
-                                Image(nsImage: AppIcons.icon(for: app.bundleID, name: app.name))
-                                    .resizable().frame(width: 18, height: 18)
-                                Text(app.name).font(.system(size: 12)).lineLimit(1)
-                                Spacer()
-                                Text("\(app.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                if languages.isEmpty && apps.isEmpty {
-                    Text("Your languages and favourite apps show up here after a few dictations.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                SectionTitle("Where your words go")
+                if apps.isEmpty {
+                    Text("The apps you dictate into show up here.").font(.system(size: 12)).foregroundStyle(.secondary)
+                } else {
+                    AppShareList(apps: apps)
                 }
             }
-            .frame(width: 240, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 26) {
+                if !languages.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionTitle("Languages")
+                        LanguageSplit(languages: languages)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionTitle("When you dictate")
+                    HourStrip(counts: UsageStats.hours(history.entries, in: period))
+                }
+            }
+            .frame(width: 260, alignment: .leading)
         }
-        .padding(18)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.secondary.opacity(0.08)))
+    }
+
+    // MARK: Latest
+
+    private var latest: [HistoryEntry] {
+        Array(history.entries.lazy.filter { $0.status == .done && !$0.text.isEmpty }.prefix(3))
+    }
+
+    private var latestDictations: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionTitle("Latest")
+                Spacer()
+                Button("Show All") { MainNavigation.shared.page = .history }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12))
+            }
+            VStack(spacing: 0) {
+                ForEach(Array(latest.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 { Divider().padding(.leading, 34) }
+                    LatestRow(entry: entry)
+                }
+            }
+        }
     }
 
     // MARK: Get started
 
-    private var getStarted: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Get started").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                .padding(.bottom, 6)
-            if !permissions.allGranted {
-                row("exclamationmark.triangle", "Finish setting up",
-                    "Dictum needs Microphone and Accessibility access to hear you and paste.") {
-                    WindowManager.shared.show(.onboarding)
-                }
-            }
-            row("record.circle", "Start recording", "Tap the shortcut, speak as long as you like, tap again to paste. Or hold it while you talk.",
-                keys: DictationController.keys(for: .pushToTalk)) { }
-            row("hand.point.up.left", "Customize your shortcuts", "Change the keyboard shortcuts for Dictum.") {
-                MainNavigation.shared.page = .configuration
-            }
-            row("sparkle", "Try Rewrite", "Clean up fillers and false starts with Tiny Aya.",
-                keys: DictationController.keys(for: .pushToTalkRewrite)) {
+    private struct Step: Identifiable {
+        let symbol: String
+        let title: String
+        let detail: String
+        var keys: [String] = []
+        let done: Bool
+        var action: (() -> Void)?
+        var id: String { title }
+    }
+
+    private var steps: [Step] {
+        [
+            Step(symbol: "lock.open", title: "Allow the microphone and pasting",
+                 detail: "Dictum needs both to hear you and to type for you.",
+                 done: permissions.allGranted) { WindowManager.shared.show(.onboarding) },
+            Step(symbol: "waveform", title: "Dictate your first sentence",
+                 detail: "Tap the shortcut in any app, speak, then tap it again. Or hold it while you talk.",
+                 keys: DictationController.keys(for: .pushToTalk), done: !history.entries.isEmpty),
+            Step(symbol: "sparkle", title: "Try Rewrite",
+                 detail: "Removes filler words and false starts, and keeps only your corrections.",
+                 keys: DictationController.keys(for: .pushToTalkRewrite),
+                 done: history.entries.contains { $0.mode == DictationMode.rewrite.rawValue }) {
                 MainNavigation.shared.page = .modes
+            },
+            Step(symbol: "character.book.closed", title: "Teach Dictum a word",
+                 detail: "Names and terms it should always spell your way.",
+                 done: !vocabulary.terms.isEmpty) { MainNavigation.shared.page = .vocabulary },
+            Step(symbol: "macwindow", title: "Choose your recording window",
+                 detail: "A small pill or a large window, and how your voice is drawn.",
+                 done: UserDefaults.standard.bool(forKey: "visitedConfiguration")) {
+                MainNavigation.shared.page = .configuration
+            },
+        ]
+    }
+
+    private var getStarted: some View {
+        let steps = steps
+        let done = steps.filter(\.done).count
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                SectionTitle("Get started")
+                HStack(spacing: 3) {
+                    ForEach(steps.indices, id: \.self) { index in
+                        Capsule().fill(index < done ? Color.accentColor : Color.secondary.opacity(0.2))
+                            .frame(width: 14, height: 4)
+                    }
+                }
+                .accessibilityHidden(true)
+                Text("\(done) of \(steps.count)").font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
             }
-            row("book.closed", "Add vocabulary", "Teach Dictum how to write names and terms.") {
-                MainNavigation.shared.page = .vocabulary
+            VStack(spacing: 2) {
+                ForEach(steps) { step in StepRow(step: step) }
             }
         }
     }
 
-    private func row(_ symbol: String, _ title: String, _ detail: String, keys: [String] = [],
-                     action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: symbol)
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 14, weight: .semibold))
-                    Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
+    private struct StepRow: View {
+        let step: Step
+
+        var body: some View {
+            Button { step.action?() } label: {
+                HStack(alignment: .center, spacing: 14) {
+                    Image(systemName: step.done ? "checkmark.circle.fill" : step.symbol)
+                        .font(.system(size: 15))
+                        .foregroundStyle(step.done ? Color.accentColor : Color.secondary)
+                        .frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(step.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(step.done ? .secondary : .primary)
+                        if !step.done {
+                            Text(step.detail).font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if !step.done, !step.keys.isEmpty { KeycapsView(keys: step.keys) }
+                    if !step.done, step.action != nil {
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                    }
                 }
-                Spacer()
-                if !keys.isEmpty { KeycapsView(keys: keys) }
+                .padding(.vertical, step.done ? 5 : 8)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 6)
-            .contentShape(Rectangle())
+            .buttonStyle(HoverRowStyle())
+            .disabled(step.done || step.action == nil)
         }
-        .buttonStyle(HoverRowStyle())
     }
 
     // MARK: What's new
 
     private var whatsNew: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("What's new").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Link("View all changes", destination: URL(string: "https://github.com/AMrtnl/dictum/releases")!)
-                    .font(.system(size: 13))
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("New in \(Self.latestChange.version)")
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.latestChange.title).font(.system(size: 13, weight: .semibold))
+                Text(Self.latestChange.detail).font(.system(size: 12)).foregroundStyle(.secondary)
             }
-            VStack(spacing: 0) {
-                ForEach(Array(Self.changes.enumerated()), id: \.offset) { index, change in
-                    HStack(alignment: .firstTextBaseline, spacing: 18) {
-                        Text(change.date).font(.system(size: 13)).foregroundStyle(.secondary)
-                            .frame(width: 48, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(change.title).font(.system(size: 14, weight: .semibold))
-                            Text(change.detail).font(.system(size: 13)).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
-                    if index < Self.changes.count - 1 { Divider().padding(.leading, 84) }
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.2)))
+            Spacer()
+            Link("All Changes", destination: URL(string: "https://github.com/AMrtnl/dictum/releases")!)
+                .font(.system(size: 12))
         }
+        .padding(.top, 14)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// A small section heading.
+private struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(.system(size: 13, weight: .semibold))
+    }
+}
+
+/// One recent dictation: where it went, what was said, a copy button on hover.
+private struct LatestRow: View {
+    let entry: HistoryEntry
+    @State private var hovering = false
+    @State private var copied = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(nsImage: AppIcons.icon(for: entry.appBundleID, name: entry.app))
+                .resizable()
+                .frame(width: 22, height: 22)
+                .opacity(entry.app == nil ? 0.5 : 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.text)
+                    .font(.system(size: 13))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                Text(meta).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                TextInserter.copy(entry.text)
+                copied = true
+                Task {
+                    try? await Task.sleep(for: .seconds(1.4))
+                    copied = false
+                }
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .opacity(hovering || copied ? 1 : 0)
+            .help("Copy")
+        }
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    private var meta: String {
+        let time = Calendar.current.isDateInToday(entry.date)
+            ? entry.date.formatted(date: .omitted, time: .shortened)
+            : entry.date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        let seconds = Int(entry.duration.rounded())
+        return [time, entry.app, seconds > 0 ? String(format: "%d:%02d", seconds / 60, seconds % 60) : nil]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+}
+
+/// Shown while Accessibility isn't granted: one line, the fix, and help for a stuck permission.
+private struct PasteNotice: View {
+    private let permissions = Permissions.shared
+    @State private var showingHelp = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Auto-paste is off").font(.system(size: 13, weight: .semibold))
+                Text("Dictum copies your text instead of typing it, until you allow Accessibility.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Not Working?") { showingHelp = true }
+                .buttonStyle(.link)
+                .font(.system(size: 12))
+                .popover(isPresented: $showingHelp, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Already allowed, but still not pasting?").font(.system(size: 13, weight: .semibold))
+                        Text("macOS can keep an outdated entry after an update. Reset it, then switch Dictum on again in Privacy & Security → Accessibility.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Reset Permission") {
+                            showingHelp = false
+                            permissions.resetAccessibility()
+                        }
+                    }
+                    .padding(14)
+                    .frame(width: 290)
+                }
+            Button("Allow Pasting") { permissions.requestAccessibility() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.orange.opacity(0.25)))
     }
 }
 
@@ -273,11 +404,12 @@ struct HoverRowStyle: ButtonStyle {
     private struct HoverRow: View {
         let configuration: ButtonStyle.Configuration
         @State private var hovering = false
+        @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.secondary.opacity(configuration.isPressed ? 0.16 : hovering ? 0.08 : 0)))
+                .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(!isEnabled ? 0 : configuration.isPressed ? 0.16 : hovering ? 0.08 : 0)))
                 .onHover { hovering = $0 }
         }
     }

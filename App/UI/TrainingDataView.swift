@@ -115,6 +115,9 @@ private struct SampleRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 TextField("Transcript", text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .labelsHidden()  // in a Form row the label would push the text to the right edge
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(1...6)
                     .onSubmit(save)
                 HStack(spacing: 6) {

@@ -111,8 +111,9 @@ private struct Sidebar: View {
             }
             .listStyle(.sidebar)
 
-            AppBadge { selection = .about }
-                .padding(12)
+            EngineStatus(models: { selection = .models }, about: { selection = .about })
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
         }
     }
 }
@@ -134,32 +135,63 @@ struct SidebarIcon: View {
     }
 }
 
-/// "Dictum 1.1" at the bottom of the sidebar; opens About.
-private struct AppBadge: View {
-    let action: () -> Void
+/// Bottom of the sidebar: whether the speech engine is ready, and with which model.
+/// Clicking it opens the Models library; the version opens About.
+private struct EngineStatus: View {
+    let models: () -> Void
+    let about: () -> Void
+    private let engine = SpeechEngine.shared
+    private let settings = AppSettings.shared
+
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                AppGlyph(size: 22)
-                Text("Dictum").font(.system(size: 14, weight: .semibold))
-                Spacer(minLength: 4)
-                Text(version)
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.secondary.opacity(0.18)))
+        HStack(spacing: 8) {
+            Button(action: models) {
+                HStack(spacing: 8) {
+                    indicator
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(settings.speechModel.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Text(state).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.1)))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.18)))
+            .buttonStyle(.plain)
+            .help("Speech model — open the Models library")
+            Spacer(minLength: 4)
+            Button(version, action: about)
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .help("About Dictum")
         }
-        .buttonStyle(.plain)
-        .help("About Dictum")
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        switch engine.phase {
+        case .ready:
+            Circle().fill(Color.green).frame(width: 7, height: 7)
+        case .failed, .needsSetup:
+            Circle().fill(Color.orange).frame(width: 7, height: 7)
+        default:
+            ProgressView().controlSize(.mini).frame(width: 7, height: 7)
+        }
+    }
+
+    private var state: String {
+        switch engine.phase {
+        case .ready: "Ready, on this Mac"
+        case .checking, .starting: "Starting…"
+        case .installingRuntime: "Setting up…"
+        case .installingModel(let fraction, let converting):
+            converting ? "Preparing…" : "Downloading \(Int(fraction * 100)) %"
+        case .needsSetup: "Not installed"
+        case .failed: "Stopped — open Models"
+        }
     }
 }
 

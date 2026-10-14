@@ -93,7 +93,7 @@ extension WindowManager {
         let views: [(String, AnyView)] = [
             ("onboarding", AnyView(OnboardingView())),
             ("main", AnyView(MainWindowView().frame(width: 940, height: 660))),
-            ("home", AnyView(HomeView().frame(width: 700, height: 640))),
+            ("home", AnyView(HomeView().frame(width: 760, height: 1150))),
             ("modes", AnyView(ModesPage().frame(width: 700, height: 360))),
             ("vocabulary", AnyView(VocabularyView().frame(width: 700, height: 420))),
             ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 2000))),
