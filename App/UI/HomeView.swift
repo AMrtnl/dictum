@@ -287,16 +287,6 @@ struct HomeView: View {
     }
 }
 
-/// A small section heading.
-private struct SectionTitle: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text).font(.system(size: 13, weight: .semibold))
-    }
-}
-
 /// One recent dictation: where it went, what was said, a copy button on hover.
 private struct LatestRow: View {
     let entry: HistoryEntry

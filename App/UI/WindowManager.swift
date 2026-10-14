@@ -94,18 +94,19 @@ extension WindowManager {
             ("onboarding", AnyView(OnboardingView())),
             ("main", AnyView(MainWindowView().frame(width: 940, height: 660))),
             ("home", AnyView(HomeView().frame(width: 760, height: 1150))),
-            ("modes", AnyView(ModesPage().frame(width: 700, height: 360))),
-            ("vocabulary", AnyView(VocabularyView().frame(width: 700, height: 420))),
+            ("modes", AnyView(ModesPage().frame(width: 760, height: 560))),
+            ("vocabulary", AnyView(VocabularyView().frame(width: 760, height: 520))),
             ("configuration", AnyView(ConfigurationPage().frame(width: 700, height: 2000))),
-            ("sound", AnyView(SoundPage().frame(width: 700, height: 300))),
-            ("models", AnyView(ModelSettings().frame(width: 700, height: 640))),
-            ("history", AnyView(HistoryPage().frame(width: 700, height: 420))),
-            ("training", AnyView(TrainingDataView().frame(width: 700, height: 620))),
+            ("sound", AnyView(SoundPage().frame(width: 700, height: 330))),
+            ("models", AnyView(ModelSettings().frame(width: 760, height: 1180))),
+            ("history", AnyView(HistoryPage().frame(width: 760, height: 520))),
+            ("training", AnyView(TrainingDataView().frame(width: 760, height: 760))),
         ]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             for (name, view) in views {
-                let host = NSHostingView(rootView: view)
+                // The real windows paint the window background behind every page; so does the snapshot.
+                let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
                 let size = host.fittingSize
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
                                       backing: .buffered, defer: false)

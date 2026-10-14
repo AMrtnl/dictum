@@ -25,8 +25,10 @@ On-device dictation for Apple Silicon Macs: Qwen3-ASR or Cohere Transcribe for s
   - While transcribing, a glow runs along a row of dots. Hands-free dictation shows a red live dot.
 - **Seven waveform styles:** Conveyor (default), Ripple, Wave, Equalizer, Ribbon, Aurora and Dot Matrix. Configuration shows each one moving, pictures of the window styles, and **Preview on Screen** to see the window where it will appear (the microphone stays off).
 - **Home window:**
-  - Words per minute, words, apps used, time saved, an activity chart, languages and top apps.
-  - Pages for Modes, Vocabulary, Configuration, Sound, the Models library, History and Training data.
+  - A one-sentence summary of what you dictated today, this week, this month or overall, with the typing time saved and your speaking pace.
+  - Your last 30 days drawn like Dictum's waveform, where your words went, your languages and when you dictate. Hover any day or hour for details.
+  - Your latest dictations, and a Get started list that tracks what's left.
+  - Pages for Modes (with examples of each), Vocabulary, Configuration, Sound (with a microphone test), the Models library, History and Training data.
 - **History** is grouped by day and keeps both the rewrite and the original. Failed dictations keep their audio so you can retry them. **Paste Last** is on ⌃⌥V.
 - **Training data (optional).** Saves each dictation's audio and word-for-word transcript as a Hugging Face "audiofolder" dataset. Correct transcripts, then export to fine-tune a model on your voice.
 - **Quick to paste when you stop:** about 0.8 s with Qwen3, however long you talked.

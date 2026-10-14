@@ -8,50 +8,61 @@ struct TrainingDataView: View {
     @State private var exportError: String?
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Save recordings for training", isOn: $settings.saveTrainingData)
-                Text("Keeps each dictation's audio and its word-for-word transcript on this Mac, so you can fine-tune a speech model on your own voice later. Check and correct transcripts below; corrected ones are marked verified.")
-                    .font(.callout).foregroundStyle(.secondary)
+        PageScroll {
+            PageLead("Keep each dictation's audio with its word-for-word transcript, so you can later teach a speech model your voice, accent and words. Everything stays on this Mac.") {
+                Toggle("Save recordings", isOn: $settings.saveTrainingData)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .help("Save recordings for training")
             }
 
-            Section {
-                HStack(spacing: 0) {
-                    stat("\(store.samples.count)", "Recordings")
-                    stat(Self.duration(store.totalDuration), "Audio")
-                    stat("\(store.verifiedCount)", "Verified")
-                    stat(ByteCountFormatter.string(fromByteCount: store.bytesOnDisk, countStyle: .file), "On disk")
-                }
-                HStack {
-                    Button("Show in Finder") {
-                        try? FileManager.default.createDirectory(at: TrainingDataStore.folder, withIntermediateDirectories: true)
-                        NSWorkspace.shared.activateFileViewerSelecting([TrainingDataStore.folder])
+            if !store.samples.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    summary
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button("Show in Finder") {
+                            try? FileManager.default.createDirectory(at: TrainingDataStore.folder, withIntermediateDirectories: true)
+                            NSWorkspace.shared.activateFileViewerSelecting([TrainingDataStore.folder])
+                        }
+                        Button("Export…", action: export)
+                        Spacer()
+                        Button("Delete All…", role: .destructive) { confirmDelete = true }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.red)
                     }
-                    Button("Export…", action: export).disabled(store.samples.isEmpty)
-                    Spacer()
-                    Button("Delete All…", role: .destructive) { confirmDelete = true }.disabled(store.samples.isEmpty)
+                    if let exportError {
+                        Text(exportError).foregroundStyle(.red).font(.system(size: 12))
+                    }
+                    Text("Exports a Hugging Face “audiofolder” dataset: audio/*.wav (16 kHz mono) and metadata.jsonl. Most fine-tuning scripts for Whisper, Parakeet or Cohere Transcribe read it as is.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            } header: {
-                Text("Dataset")
-            } footer: {
-                Text("Hugging Face “audiofolder” format: audio/*.wav (16 kHz mono) and metadata.jsonl with file_name, transcription, language. Most fine-tuning scripts for Whisper, Parakeet or Cohere Transcribe load it directly.")
-            }
-            if let exportError {
-                Text(exportError).foregroundStyle(.red).font(.callout)
             }
 
-            Section("Recordings") {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle("Recordings")
                 if store.samples.isEmpty {
-                    Text(settings.saveTrainingData ? "Your next dictations will appear here." : "Turn on “Save recordings for training” to start collecting.")
+                    Text(settings.saveTrainingData
+                         ? "Your next dictations will appear here."
+                         : "Turn on saving to start collecting. Nothing is kept until you do.")
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(store.samples) { sample in
-                        SampleRow(sample: sample)
+                    Text("Listen, correct what the model got wrong, then mark it correct. Checked recordings make the best training data.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(store.samples.enumerated()), id: \.element.id) { index, sample in
+                            if index > 0 { Divider().padding(.leading, 34) }
+                            SampleRow(sample: sample)
+                        }
                     }
                 }
             }
         }
-        .formStyle(.grouped)
         .confirmationDialog("Delete all saved recordings?", isPresented: $confirmDelete) {
             Button("Delete All", role: .destructive) {
                 SamplePlayer.shared.stop()
@@ -63,12 +74,12 @@ struct TrainingDataView: View {
         .onDisappear { SamplePlayer.shared.stop() }
     }
 
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit()
-            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var summary: Text {
+        let recordings = Text("\(store.samples.count) recording\(store.samples.count == 1 ? "" : "s")").foregroundStyle(.primary)
+        let audio = Text(Self.duration(store.totalDuration)).foregroundStyle(.primary)
+        let checked = Text("\(store.verifiedCount) checked").foregroundStyle(.primary)
+        let size = Text(ByteCountFormatter.string(fromByteCount: store.bytesOnDisk, countStyle: .file)).foregroundStyle(.primary)
+        return Text("\(recordings), \(audio) of audio, \(checked) by you, \(size) on this Mac.")
     }
 
     private func export() {
@@ -127,11 +138,11 @@ private struct SampleRow: View {
                     Text("·")
                     Text(sample.language.uppercased())
                     if sample.verified {
-                        Label("Verified", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                        Label("Checked", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     } else if text != sample.transcription {
-                        Button("Save correction", action: save).buttonStyle(.link)
+                        Button("Save Correction", action: save).buttonStyle(.link)
                     } else {
-                        Button("Mark verified", action: save).buttonStyle(.link)
+                        Button("Mark as Correct", action: save).buttonStyle(.link)
                     }
                 }
                 .font(.system(size: 11))
@@ -147,7 +158,7 @@ private struct SampleRow: View {
             .buttonStyle(.borderless)
             .help("Delete")
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 10)
     }
 
     private func save() {

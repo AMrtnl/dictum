@@ -163,16 +163,34 @@ struct FlowLayout: Layout {
 struct SoundPage: View {
     @Bindable private var settings = AppSettings.shared
     @State private var devices = AudioDevices.inputs()
+    @State private var tester = MicrophoneTester()
+    private let permissions = Permissions.shared
 
     var body: some View {
         Form {
-            Section("Input") {
+            Section {
                 Picker("Microphone", selection: $settings.microphoneUID) {
                     Text("System default (\(AudioDevices.defaultInputName() ?? "none"))").tag(String?.none)
                     ForEach(devices) { Text($0.name).tag(Optional($0.uid)) }
                 }
-                Text("The microphone is only open while you hold a dictation shortcut.")
-                    .font(.callout).foregroundStyle(.secondary)
+                LabeledContent("Level") {
+                    HStack(spacing: 12) {
+                        LevelMeter(level: tester.level, active: tester.isRunning)
+                        Button(tester.isRunning ? "Stop" : "Test Microphone") {
+                            if tester.isRunning { tester.stop() } else { tester.start(deviceUID: settings.microphoneUID) }
+                        }
+                        .disabled(permissions.microphone != .granted)
+                    }
+                }
+                Text(tester.isRunning
+                     ? "Say something: the bars should move as you speak. Nothing is recorded."
+                     : permissions.microphone == .granted
+                        ? "The microphone is only on while you dictate, or for the few seconds of a test."
+                        : "Allow microphone access first (About → Permissions).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Input")
             }
             Section("Feedback") {
                 Toggle("Play start and stop sounds", isOn: $settings.playSounds)
@@ -180,145 +198,255 @@ struct SoundPage: View {
         }
         .formStyle(.grouped)
         .onAppear { devices = AudioDevices.inputs() }
+        .onDisappear { tester.stop() }
+        .onChange(of: settings.microphoneUID) {
+            if tester.isRunning { tester.start(deviceUID: settings.microphoneUID) }
+        }
     }
 }
 
-/// The two modes as cards, superwhisper-style: click one to make it the default.
+/// Sixteen segments lit up to the input level; the top ones warn of clipping.
+private struct LevelMeter: View {
+    let level: Float
+    let active: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<16, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(active && Float(index) / 16 < level
+                          ? (index >= 14 ? Color.orange : Color.accentColor)
+                          : Color.secondary.opacity(0.18))
+                    .frame(width: 5, height: 14)
+            }
+        }
+        .animation(.linear(duration: 0.08), value: level)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Input level")
+        .accessibilityValue(active ? "\(Int(level * 100)) percent" : "Off")
+    }
+}
+
+/// The two modes side by side, each with what you say and what Dictum writes;
+/// click one to make it what the dictation shortcut does.
 struct ModesPage: View {
     @Bindable private var settings = AppSettings.shared
     private let engine = SpeechEngine.shared
 
+    private static let said = "um so the report is due on friday no actually thursday"
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("The default mode runs when you hold the dictation shortcut. The Rewrite shortcut always rewrites.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                card(.dictation, symbol: "waveform", keys: DictationController.keys(for: .pushToTalk))
-                card(.rewrite, symbol: "sparkle", keys: DictationController.keys(for: .pushToTalkRewrite))
-                if engine.rewriteModel != .installed {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
-                        Text("Rewrite needs the Tiny Aya model (1.9 GB on disk).").font(.system(size: 13))
-                        Spacer()
-                        Button("Models library…") { MainNavigation.shared.page = .models }
-                    }
-                    .padding(14)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.07)))
+        PageScroll {
+            PageLead(lead)
+            HStack(alignment: .top, spacing: 14) {
+                ModeCard(mode: .dictation, symbol: "waveform", selected: settings.mode == .dictation,
+                         said: Self.said, written: "Um, so the report is due on Friday, no, actually Thursday.") {
+                    settings.mode = .dictation
+                }
+                ModeCard(mode: .rewrite, symbol: "sparkle", selected: settings.mode == .rewrite,
+                         said: Self.said, written: "The report is due on Thursday.") {
+                    settings.mode = .rewrite
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 22)
-            .frame(maxWidth: 820, alignment: .leading)
+            rewriteModelNote
         }
     }
 
-    private func card(_ mode: DictationMode, symbol: String, keys: [String]) -> some View {
-        let selected = settings.mode == mode
-        return Button { settings.mode = mode } label: {
-            HStack(spacing: 14) {
-                SidebarIcon(symbol: symbol, tint: mode == .rewrite ? .blue : .orange)
-                    .scaleEffect(1.4)
-                    .frame(width: 34, height: 34)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(mode.title).font(.system(size: 15, weight: .semibold))
-                        if selected {
-                            Text("Default")
-                                .font(.system(size: 11, weight: .semibold))
-                                .padding(.horizontal, 7).padding(.vertical, 2)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    Text(mode.summary).font(.system(size: 13)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                KeycapsView(keys: keys)
+    private var lead: Text {
+        let dictate = Text(DictationController.keys(for: .pushToTalk).joined()).fontWeight(.semibold).foregroundStyle(.primary)
+        let rewrite = Text(DictationController.keys(for: .pushToTalkRewrite).joined()).fontWeight(.semibold).foregroundStyle(.primary)
+        return Text("\(dictate) uses the mode you pick here. \(rewrite) always rewrites, so you can choose at the moment you speak.")
+    }
+
+    @ViewBuilder
+    private var rewriteModelNote: some View {
+        switch engine.rewriteModel {
+        case .installed:
+            EmptyView()
+        case .installing(let fraction):
+            InlineNote(symbol: "arrow.down.circle", text: fraction >= 1 ? "Preparing Tiny Aya…" : "Downloading Tiny Aya… \(Int(fraction * 100)) %") {
+                ProgressView(value: min(fraction, 1)).frame(width: 120)
             }
-            .padding(16)
-            .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color.secondary.opacity(selected ? 0.12 : 0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: selected ? 2 : 1))
+        case .missing:
+            InlineNote(symbol: "arrow.down.circle", text: "Rewrite uses Tiny Aya, a 1.9 GB model that runs on this Mac.") {
+                Button("Download") { Task { await engine.installRewriteModel() } }
+                    .disabled(!engine.isReady)
+            }
         }
-        .buttonStyle(.plain)
     }
 }
 
+private struct ModeCard: View {
+    let mode: DictationMode
+    let symbol: String
+    let selected: Bool
+    let said: String
+    let written: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Panel(selected: selected) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: symbol)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        Text(mode.title).font(.system(size: 15, weight: .semibold))
+                        Spacer()
+                        if selected {
+                            Chip("Default")
+                        } else {
+                            Text("Make Default").font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(mode.summary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("You say").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                            Text("“\(said)”").font(.system(size: 13)).italic().foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Dictum writes").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                            Text(written).font(.system(size: 13))
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The Models library: each speech model with what it's good at and measured numbers,
+/// the one in use outlined; then Rewrite's model and how long models stay in memory.
 struct ModelSettings: View {
     @Bindable private var settings = AppSettings.shared
     private let engine = SpeechEngine.shared
 
     var body: some View {
-        Form {
-            Section {
+        PageScroll {
+            PageLead("Every model runs on this Mac, and what you say never leaves it. Pick the one that suits how you talk.")
+
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(SpeechModel.allCases) { model in
                     SpeechModelCard(model: model)
                 }
                 if let error = engine.speechModelError {
-                    Text(error).font(.callout).foregroundStyle(.red)
+                    Text(error).font(.system(size: 12)).foregroundStyle(.red)
                 }
-                Picker("Keep loaded", selection: $settings.speechKeepLoaded) {
-                    ForEach([KeepLoaded.always, .oneHour, .fiveMinutes]) { Text($0.title).tag($0) }
-                }
-                .onChange(of: settings.speechKeepLoaded) { Task { await engine.applyKeepLoaded() } }
-                Text("“Always” makes every dictation instant. Shorter times free the model's memory between bursts of dictation; the next one then takes a few seconds longer.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } header: {
-                Text("Speech")
-            } footer: {
-                Text("Accuracy is word error rate on real English / French test speech (lower is better); speed is for a 10-second dictation on an M4 Pro. All models run on this Mac.")
+                Text("Errors is the word error rate on real English and French speech; lower is better. Speed is for a 10-second dictation on an M4 Pro.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
-                rewriteStatus
-                Picker("Keep loaded", selection: $settings.rewriteKeepLoaded) {
-                    ForEach([KeepLoaded.thirtySeconds, .oneMinute, .fiveMinutes, .oneHour]) { Text($0.title).tag($0) }
-                }
-                .onChange(of: settings.rewriteKeepLoaded) { Task { await engine.applyKeepLoaded() } }
-            } header: {
-                Text("Rewrite — Tiny Aya Global")
-            } footer: {
-                Text("3.35B parameters, 4-bit. Licensed CC-BY-NC 4.0: personal, non-commercial use only.")
+            VStack(alignment: .leading, spacing: 12) {
+                SectionTitle("Rewrite")
+                rewriteCard
             }
 
-            Section {
-                LabeledContent("Location") {
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Paths.models]) }
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                SectionTitle("Memory")
+                    .padding(.bottom, 6)
+                keepLoadedRow(
+                    title: "Keep the speech model loaded",
+                    detail: "“Always” makes every dictation start instantly. A shorter time frees about 2.5 GB between bursts of dictation; the next one then waits a few seconds.",
+                    selection: $settings.speechKeepLoaded,
+                    options: [.always, .oneHour, .fiveMinutes]
+                )
+                Divider()
+                keepLoadedRow(
+                    title: "Keep Rewrite loaded",
+                    detail: "Rewrite's model uses about 1.9 GB while it's loaded.",
+                    selection: $settings.rewriteKeepLoaded,
+                    options: [.thirtySeconds, .oneMinute, .fiveMinutes, .oneHour]
+                )
             }
+            .onChange(of: settings.speechKeepLoaded) { Task { await engine.applyKeepLoaded() } }
+            .onChange(of: settings.rewriteKeepLoaded) { Task { await engine.applyKeepLoaded() } }
+
+            Button("Show Models in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Paths.models]) }
+                .buttonStyle(.link)
+                .font(.system(size: 12))
         }
-        .formStyle(.grouped)
     }
 
-    @ViewBuilder
-    private var rewriteStatus: some View {
-        switch engine.rewriteModel {
-        case .installed:
-            LabeledContent("Status") {
-                HStack {
-                    GrantedLabel(text: "Installed")
-                    Button("Remove") { Task { await engine.removeRewriteModel() } }
+    private func keepLoadedRow(title: String, detail: String, selection: Binding<KeepLoaded>,
+                               options: [KeepLoaded]) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13))
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Picker(title, selection: selection) {
+                ForEach(options) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var rewriteCard: some View {
+        Panel(selected: engine.rewriteModel == .installed && settings.mode == .rewrite) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("Tiny Aya Global").font(.system(size: 15, weight: .semibold))
+                        Chip("Cleans up", tint: .secondary)
+                    }
+                    Text("Removes filler words and false starts and keeps only your corrections. If its rewrite drifts from what you said, Dictum pastes your words as spoken.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 24) {
+                        Figure(value: "~0.8 s", label: "Per sentence")
+                        Figure(value: "1.9 GB", label: "Memory")
+                        Figure(value: "3.6 GB", label: "Download")
+                    }
+                    Text("Licensed CC-BY-NC 4.0: personal, non-commercial use only.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    if case .installing(let fraction) = engine.rewriteModel {
+                        ProgressView(value: min(fraction, 1))
+                    }
+                    if let error = engine.rewriteError {
+                        Text(error).font(.system(size: 12)).foregroundStyle(.red)
+                    }
                 }
-            }
-        case .installing(let fraction):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(fraction >= 1 ? "Converting to 4-bit…" : "Downloading… \(Int(fraction * 100)) %").font(.callout)
-                ProgressView(value: fraction)
-            }
-        case .missing:
-            LabeledContent("Status") {
-                Button("Download (3.6 GB, 1.9 GB on disk)") { Task { await engine.installRewriteModel() } }
-                    .disabled(!engine.isReady)
-            }
-            if let error = engine.rewriteError {
-                Text(error).font(.callout).foregroundStyle(.red)
+                Spacer(minLength: 8)
+                switch engine.rewriteModel {
+                case .installed:
+                    VStack(alignment: .trailing, spacing: 8) {
+                        GrantedLabel(text: "Installed")
+                        Button("Remove") { Task { await engine.removeRewriteModel() } }
+                            .controlSize(.small)
+                    }
+                case .installing(let fraction):
+                    Text(fraction >= 1 ? "Preparing…" : "\(Int(fraction * 100)) %")
+                        .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+                case .missing:
+                    Button("Download") { Task { await engine.installRewriteModel() } }
+                        .disabled(!engine.isReady)
+                }
             }
         }
     }
 }
 
-/// One speech model in the Models library: what it's good at, measured numbers, and actions.
+/// One speech model: what it's good at, its measured numbers, and what you can do with it.
 struct SpeechModelCard: View {
     let model: SpeechModel
     private let engine = SpeechEngine.shared
@@ -327,43 +455,50 @@ struct SpeechModelCard: View {
     var body: some View {
         let state = engine.speechModels[model] ?? .missing
         let inUse = settings.speechModel == model
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(model.title).font(.system(size: 14, weight: .semibold))
-                Text(model.badge)
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
-                    .foregroundStyle(Color.accentColor)
-                Spacer()
+        Panel(selected: inUse) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text(model.title).font(.system(size: 15, weight: .semibold))
+                        Chip(model.badge, tint: .secondary)
+                    }
+                    Text(model.summary)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 24) {
+                        Figure(value: model.accuracy, label: "Errors EN / FR")
+                        Figure(value: model.speed, label: "Speed")
+                        Figure(value: model.memory, label: "Memory")
+                        Figure(value: model.download, label: "Download")
+                    }
+                    HStack(spacing: 14) {
+                        if model.detectsLanguage { Label("Detects the language", systemImage: "globe") }
+                        if model.usesVocabulary { Label("Uses your vocabulary", systemImage: "character.book.closed") }
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    if case .installing(let fraction) = state {
+                        ProgressView(value: min(fraction, 1))
+                    }
+                }
+                Spacer(minLength: 8)
                 actions(state: state, inUse: inUse)
             }
-            Text(model.summary).font(.system(size: 12)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 16) {
-                metric("Accuracy", model.accuracy)
-                metric("Speed", model.speed)
-                metric("Memory", model.memory)
-                metric("Download", model.download)
-                if model.detectsLanguage { tag("Detects language", "globe") }
-                if model.usesVocabulary { tag("Vocabulary", "book.closed") }
-            }
-            if case .installing(let fraction) = state {
-                ProgressView(value: fraction)
-            }
         }
-        .padding(.vertical, 6)
     }
 
     @ViewBuilder
     private func actions(state: SpeechEngine.ModelState, inUse: Bool) -> some View {
         switch state {
         case .installed where inUse:
-            GrantedLabel(text: "In use")
+            Chip("In use")
         case .installed:
-            HStack(spacing: 6) {
-                Button("Remove") { Task { await engine.removeSpeechModel(model) } }
+            VStack(alignment: .trailing, spacing: 8) {
                 Button("Use") { Task { await engine.use(model) } }.buttonStyle(.borderedProminent)
+                Button("Remove") { Task { await engine.removeSpeechModel(model) } }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12))
             }
         case .installing(let fraction):
             Text(fraction >= 0.999 ? "Preparing…" : "\(Int(fraction * 100)) %")
@@ -372,19 +507,6 @@ struct SpeechModelCard: View {
             Button("Download") { Task { await engine.installSpeechModel(model) } }
                 .disabled(engine.isBusySettingUp && !inUse)
         }
-    }
-
-    private func metric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.system(size: 12, weight: .semibold)).monospacedDigit()
-            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
-        }
-    }
-
-    private func tag(_ text: String, _ symbol: String) -> some View {
-        Label(text, systemImage: symbol)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
     }
 }
 
@@ -396,23 +518,41 @@ struct HistoryPage: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Toggle("Save history", isOn: $settings.saveHistory)
+                Text(summary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Toggle("Keep history", isOn: $settings.saveHistory)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                Text("\(history.entries.count) dictations · text only, on this Mac")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear…", role: .destructive) { confirmClear = true }
-                    .disabled(history.entries.isEmpty)
+                Menu {
+                    Button("Clear History…", role: .destructive) { confirmClear = true }
+                        .disabled(history.entries.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 22)
             .padding(.vertical, 10)
             Divider()
             HistoryView()
         }
         .confirmationDialog("Clear all saved dictations?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { history.clear() }
+        } message: {
+            Text("The text of every dictation is removed from this Mac.")
         }
+    }
+
+    private var summary: String {
+        guard settings.saveHistory else { return "History is off. New dictations aren't kept." }
+        let count = history.entries.count
+        return count == 0 ? "Your dictations are kept here, as text, on this Mac."
+            : "\(count) dictation\(count == 1 ? "" : "s"), kept as text on this Mac."
     }
 }
 
@@ -429,7 +569,9 @@ struct AboutSettings: View {
                     AppGlyph(size: 52)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dictum").font(.title2.weight(.semibold))
-                        Text("Version \(version) · on-device dictation for Apple Silicon")
+                        Text("Version \(version)")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Text("Dictation that runs entirely on this Mac.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -451,7 +593,7 @@ struct AboutSettings: View {
                     Button("Open Logs") { NSWorkspace.shared.open(Paths.logs) }
                 }
             } footer: {
-                Text("Cohere Transcribe (Apache 2.0) · Tiny Aya (CC-BY-NC 4.0) · mlx-speech, mlx-lm (MIT) · KeyboardShortcuts (MIT)")
+                Text("Models: Qwen3-ASR and Cohere Transcribe (Apache 2.0), Nemotron (OpenMDW 1.1), Tiny Aya (CC-BY-NC 4.0, non-commercial). Libraries: mlx-speech, mlx-lm and KeyboardShortcuts (MIT).")
             }
         }
         .formStyle(.grouped)
