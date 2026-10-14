@@ -243,6 +243,7 @@ struct ModesPage: View {
         case .missing:
             InlineNote(symbol: "arrow.down.circle", text: "Rewrite needs Tiny Aya (1.9 GB, runs on this Mac).") {
                 Button("Download") { Task { await engine.installRewriteModel() } }
+                    .glassButton()
                     .disabled(!engine.isReady)
             }
         }
@@ -465,6 +466,7 @@ struct ModelSettings: View {
                         .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
                 case .missing:
                     Button("Download") { Task { await engine.installRewriteModel() } }
+                        .glassButton()
                         .disabled(!engine.isReady)
                 }
             }
@@ -521,7 +523,7 @@ struct SpeechModelCard: View {
             Chip("In use")
         case .installed:
             VStack(alignment: .trailing, spacing: 8) {
-                Button("Use") { Task { await engine.use(model) } }.buttonStyle(.borderedProminent)
+                Button("Use") { Task { await engine.use(model) } }.glassButton(prominent: true)
                 Button("Remove") { Task { await engine.removeSpeechModel(model) } }
                     .buttonStyle(.link)
                     .font(.system(size: 12))
@@ -531,6 +533,7 @@ struct SpeechModelCard: View {
                 .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
         case .missing:
             Button("Download") { Task { await engine.installSpeechModel(model) } }
+                .glassButton()
                 .disabled(engine.isBusySettingUp && !inUse)
         }
     }

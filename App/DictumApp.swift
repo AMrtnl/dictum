@@ -65,6 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
+    /// Opening Dictum again (Finder, Spotlight, Launchpad) while it runs shows Home.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        WindowManager.shared.show(.home)
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         SpeechEngine.shared.stop()
     }

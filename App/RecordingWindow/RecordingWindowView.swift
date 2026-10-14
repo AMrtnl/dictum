@@ -174,6 +174,30 @@ class RecordingWindowView: NSView {
     /// (mostly transparent) window go to the app underneath. The surface, plus the resize band.
     /// For the snap guides, which draw the surface's shape.
     var surfaceCornerRadius: CGFloat { min(surfaceFrame.height / 2, 22) }
+
+    // MARK: Liquid Glass
+
+    /// Liquid Glass behind the surface: where (view coordinates), how round, tinted how.
+    struct GlassShape {
+        var frame: CGRect
+        var cornerRadius: CGFloat
+        var tint: NSColor?
+        /// A pill: fully rounded ends whatever its height, also mid-morph.
+        var isCapsule = false
+    }
+
+    /// Whether this style wants Liquid Glass behind its surface (macOS 26 and later).
+    var wantsGlass: Bool { false }
+    /// The glass the surface wants right now.
+    var glassShape: GlassShape? { nil }
+    /// Set by the panel once it puts glass behind this view; call it when the shape changes.
+    var onGlassChange: ((GlassShape?, _ animated: Bool) -> Void)? {
+        didSet { if (onGlassChange == nil) != (oldValue == nil) { glassDidChange() } }
+    }
+    /// True when the panel draws glass behind the surface: the surface then stays clear.
+    var usesGlass: Bool { onGlassChange != nil }
+    /// Subclasses clear or restore their own surface fill here.
+    func glassDidChange() {}
     var interactiveFrame: CGRect { surfaceFrame.insetBy(dx: isResizable ? -5 : -2, dy: isResizable ? -5 : -2) }
     var minimumSurfaceSize: CGSize { surfaceFrame.size }
     var maximumSurfaceSize: CGSize { surfaceFrame.size }

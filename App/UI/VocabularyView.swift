@@ -14,22 +14,44 @@ struct VocabularyView: View {
         PageScroll {
             PageLead("Names, brands and jargon Dictum should always spell your way.")
 
-            DashCard(padding: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                    TextField("Word", text: $word, prompt: Text("New word, e.g. Ghostty"))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Color.accentColor)
+                    TextField("Word", text: $word, prompt: Text("New word"))
+                        .font(.system(size: 15, weight: .semibold))
                         .focused($wordFocused)
-                        .frame(width: 210)
-                    Image(systemName: "arrow.left").font(.system(size: 11)).foregroundStyle(.tertiary)
-                    TextField("Heard as", text: $heardAs, prompt: Text("how it gets misheard: ghosty, ghost tea"))
+                        .frame(width: 170)
+                    Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 20)
+                    Image(systemName: "ear")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .help("How the speech model mishears it, separated by commas")
+                    TextField("Heard as", text: $heardAs, prompt: Text("misheard as… (optional)"))
+                        .font(.system(size: 14))
                     Button("Add", action: add)
+                        .glassButton(prominent: true)
                         .keyboardShortcut(.defaultAction)
                         .disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .textFieldStyle(.plain)
                 .labelsHidden()
                 .onSubmit(add)
+                .padding(.leading, 14)
+                .padding(.trailing, 6)
+                .padding(.vertical, 7)
+                .glassSurface(cornerRadius: 24, interactive: true)
+
+                if !word.trimmingCharacters(in: .whitespaces).isEmpty {
+                    preview
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 16)
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeOut(duration: 0.15), value: word.isEmpty)
 
             if vocabulary.terms.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -58,6 +80,17 @@ struct VocabularyView: View {
                 }
             }
         }
+    }
+
+    /// What the new word will do, as you type it.
+    private var preview: Text {
+        let target = Text(word.trimmingCharacters(in: .whitespaces)).fontWeight(.semibold).foregroundStyle(.primary)
+        let spellings = Self.split(heardAs)
+        guard !spellings.isEmpty else { return Text("Dictum will always write \(target).") }
+        let heard = spellings.map { Text($0).strikethrough() }.reduce(Text("")) { list, item in
+            list == Text("") ? item : Text("\(list), \(item)")
+        }
+        return Text("Dictum will write \(target) when it hears \(heard).")
     }
 
     private func add() {

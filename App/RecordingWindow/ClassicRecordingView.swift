@@ -117,10 +117,27 @@ final class ClassicRecordingView: RecordingWindowView {
     }
     override var maximumSurfaceSize: CGSize { CGSize(width: 1200, height: 420) }
 
+    override var wantsGlass: Bool { true }
+
+    override var glassShape: GlassShape? {
+        GlassShape(frame: surfaceFrame, cornerRadius: 22, tint: NSColor(white: 0.03, alpha: 0.62))
+    }
+
+    /// With Liquid Glass behind it, the card only draws its contents.
+    override func glassDidChange() {
+        withoutAnimation {
+            card.backgroundColor = usesGlass ? NSColor.clear.cgColor : NSColor(white: 0.07, alpha: 1).cgColor
+            card.borderColor = usesGlass ? NSColor.clear.cgColor : NSColor.white.withAlphaComponent(0.12).cgColor
+            card.shadowOpacity = usesGlass ? 0 : 0.35
+        }
+        onGlassChange?(glassShape, false)
+    }
+
     override func layoutSurface() {
         let size = surfaceFrame.size
         card.frame = surfaceFrame
         updateShadowPath(card)
+        onGlassChange?(glassShape, false)
 
         footer.frame = CGRect(x: Self.footerInset, y: Self.footerInset,
                               width: size.width - 2 * Self.footerInset, height: Self.footerHeight)

@@ -223,11 +223,13 @@ private struct WaveformCard: View {
                 .padding(.horizontal, 2)
             }
             .padding(8)
-            .background(RoundedRectangle(cornerRadius: 12)
-                .fill(selected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: selected ? 2 : 1))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .glassSurface(cornerRadius: 14, tint: selected ? Color.accentColor.opacity(0.2) : nil)
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
         .help(style.summary)

@@ -67,6 +67,7 @@ final class RecordingPanel: NSPanel {
         isReleasedWhenClosed = false
         animationBehavior = .none
         contentView = content
+        if #available(macOS 26, *), content.wantsGlass { installGlass() }
 
         if content.isResizable, let saved = savedFrame {
             setContentSize(clamped(saved.size))
@@ -79,6 +80,62 @@ final class RecordingPanel: NSPanel {
     }
 
     private var isAnchored: Bool { content.snapsToAnchors || frameKey == nil }
+
+    // MARK: - Liquid Glass
+
+    private var glassView: NSView?
+    private var glassRadius: CGFloat = 0
+
+    /// Puts a Liquid Glass view behind the content (macOS 26 and later). The content view,
+    /// drawn with Core Animation, sits on top with its own surface left clear; the glass
+    /// follows the surface's shape as it morphs.
+    @available(macOS 26, *)
+    private func installGlass() {
+        let container = NSView(frame: NSRect(origin: .zero, size: content.frame.size))
+        container.autoresizesSubviews = true
+        let glass = NSGlassEffectView(frame: .zero)
+        glass.style = .regular
+        container.addSubview(glass)
+        content.frame = container.bounds
+        content.autoresizingMask = [.width, .height]
+        container.addSubview(content)
+        contentView = container
+        glassView = glass
+        content.onGlassChange = { [weak self] shape, animated in self?.applyGlass(shape, animated: animated) }
+        applyGlass(content.glassShape, animated: false)
+    }
+
+    @available(macOS 26, *)
+    private func applyGlass(_ shape: RecordingWindowView.GlassShape?, animated: Bool) {
+        guard let glass = glassView as? NSGlassEffectView else { return }
+        guard let shape else {
+            glass.isHidden = true
+            return
+        }
+        glass.isHidden = false
+        glass.tintColor = shape.tint
+        // A pill keeps round ends at every size, so the corners never show mid-morph.
+        let radius = shape.isCapsule ? 1_000 : shape.cornerRadius
+        guard animated, isVisible, glass.frame.size != .zero else {
+            glass.frame = shape.frame
+            glass.cornerRadius = radius
+            glassRadius = radius
+            return
+        }
+        // Rounder of the two while moving; the target once there.
+        glass.cornerRadius = max(radius, glassRadius)
+        glassRadius = radius
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.42
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 1.1, 0.45, 1)
+            context.allowsImplicitAnimation = true
+            glass.animator().frame = shape.frame
+        } completionHandler: {
+            MainActor.assumeIsolated {
+                if self.glassRadius == radius { glass.cornerRadius = radius }
+            }
+        }
+    }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }

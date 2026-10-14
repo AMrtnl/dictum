@@ -175,6 +175,29 @@ final class MiniRecordingView: RecordingWindowView {
         size.height > Self.activeSize.height ? Self.liveCornerRadius : size.height / 2
     }
 
+    // MARK: Liquid Glass
+
+    override var wantsGlass: Bool { true }
+
+    override var glassShape: GlassShape? { glass(for: visual) }
+
+    /// Smoky glass: light at rest, darker as it opens, darkest while dictating, so the
+    /// white waveform and icons read over any background.
+    private func glass(for visual: Visual) -> GlassShape {
+        let size = size(of: visual)
+        let radius = cornerRadius(for: size)
+        let tint = switch visual {
+        case .sleep: NSColor(white: 0.05, alpha: 0.35)
+        case .toolbar: NSColor(white: 0.02, alpha: 0.55)
+        case .active: NSColor(white: 0, alpha: 0.72)
+        }
+        return GlassShape(frame: anchoredRect(size), cornerRadius: radius, tint: tint, isCapsule: radius == size.height / 2)
+    }
+
+    override func glassDidChange() {
+        apply(visual, animated: false)
+    }
+
     /// The surface hugs the anchored side of the window; any extra room (tooltips) is on the inner side.
     private func anchoredRect(_ size: CGSize) -> CGRect {
         let x = anchor.isLeft ? Self.margin
@@ -239,6 +262,7 @@ final class MiniRecordingView: RecordingWindowView {
             hoverPad.frame = frame.insetBy(dx: -4, dy: -6)
             // Going to sleep, the finished text stays put while it fades out.
             if messageVisible { spring(message.layer, "position", NSValue(point: messagePosition(for: frame)), animated) }
+            onGlassChange?(glass(for: next), animated)
         }
 
         // Colours and fades: eased, quick; contents fade in a beat after the shape starts growing.
@@ -247,6 +271,11 @@ final class MiniRecordingView: RecordingWindowView {
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
         CATransaction.setDisableActions(!animated)
         switch next {
+        case _ where usesGlass:
+            // Liquid Glass behind (drawn by the panel): the capsule only carries the contents.
+            capsule.backgroundColor = NSColor.clear.cgColor
+            capsule.borderColor = NSColor.clear.cgColor
+            capsule.shadowOpacity = 0
         case .sleep:
             // Translucent and outlined, like superwhisper's resting pill.
             capsule.backgroundColor = NSColor(white: 0.1, alpha: 0.62).cgColor

@@ -12,6 +12,21 @@ final class ToastView: RecordingWindowView {
         bounds.insetBy(dx: Self.margin, dy: Self.margin)
     }
 
+    override var wantsGlass: Bool { true }
+
+    override var glassShape: GlassShape? {
+        GlassShape(frame: surfaceFrame, cornerRadius: surfaceFrame.height / 2,
+                   tint: NSColor(white: 0, alpha: 0.6), isCapsule: true)
+    }
+
+    override func glassDidChange() {
+        withoutAnimation {
+            bubble.layer.backgroundColor = usesGlass ? NSColor.clear.cgColor : NSColor(white: 0.09, alpha: 0.96).cgColor
+            bubble.layer.borderColor = usesGlass ? NSColor.clear.cgColor : NSColor.white.withAlphaComponent(0.1).cgColor
+            bubble.layer.shadowOpacity = usesGlass ? 0 : 0.3
+        }
+    }
+
     init(_ message: String, symbol: String = "exclamationmark.circle.fill") {
         let size = bubble.set(message, symbol: symbol, maximumWidth: Self.maximumWidth)
         super.init(size: NSSize(width: size.width + 2 * Self.margin, height: size.height + 2 * Self.margin),

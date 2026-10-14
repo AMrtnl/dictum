@@ -85,9 +85,12 @@ struct Panel<Content: View>: View {
         content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(selected ? Color.accentColor.opacity(0.06) : Color.clear))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.22), lineWidth: selected ? 2 : 1))
+            .glassSurface(cornerRadius: 16, tint: selected ? Color.accentColor.opacity(0.22) : nil)
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
     }
 }
 
@@ -119,7 +122,7 @@ struct InlineNote<Action: View>: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.07)))
+        .glassSurface(cornerRadius: 14)
     }
 }
 
@@ -143,8 +146,17 @@ struct DashCard<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color.cardFill))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.cardBorder))
+            .glassSurface(cornerRadius: 16)
+    }
+}
+
+/// A card's title, set where TabStrip's tabs would sit.
+struct CardTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 9).padding(.vertical, 4)
     }
 }
 
@@ -209,5 +221,31 @@ struct FlagIcon: View {
 
     var body: some View {
         Text(SpeechLanguage.flag(for: code)).font(.system(size: 14))
+    }
+}
+
+// MARK: - Liquid Glass
+
+extension View {
+    /// Liquid Glass (macOS 26 and later) in a rounded shape; a quiet card fill before that.
+    @ViewBuilder
+    func glassSurface(cornerRadius: CGFloat, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(Glass.regular.tint(tint).interactive(interactive),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            background(RoundedRectangle(cornerRadius: cornerRadius).fill(tint?.opacity(0.12) ?? Color.cardFill))
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(Color.cardBorder))
+        }
+    }
+
+    /// Glass buttons on macOS 26 and later (prominent for the main action); bordered before.
+    @ViewBuilder
+    func glassButton(prominent: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
+        } else {
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
+        }
     }
 }

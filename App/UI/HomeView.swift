@@ -119,8 +119,6 @@ struct HomeView: View {
 
     // MARK: Breakdown
 
-    @State private var breakdownTab = 0
-
     private var breakdown: some View {
         let apps = UsageStats.topApps(history.entries, in: period, limit: 6)
         let languages = UsageStats.languages(history.entries, in: period)
@@ -129,30 +127,16 @@ struct HomeView: View {
             DashCard {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        TabStrip(tabs: ["Apps", "Languages"], selection: $breakdownTab)
+                        CardTitle("Where your words go")
                         Spacer()
-                        Text(breakdownTab == 0 ? "Words" : "Dictations")
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                        Text("Words").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     }
                     VStack(spacing: 4) {
-                        if breakdownTab == 0 {
-                            if apps.isEmpty {
-                                emptyRow("The apps you dictate into show up here.")
-                            }
-                            ForEach(apps, id: \.name) { app in
-                                BarRow(label: app.name, value: Self.compact(app.words),
-                                       fraction: Double(app.words) / mostWords) {
-                                    Image(nsImage: AppIcons.icon(for: app.bundleID, name: app.name)).resizable()
-                                }
-                            }
-                        } else {
-                            let top = languages.first?.share ?? 1
-                            ForEach(languages.prefix(6), id: \.code) { language in
-                                BarRow(label: SpeechLanguage.name(for: language.code),
-                                       value: "\(Int((language.share * 100).rounded())) %",
-                                       fraction: language.share / top) {
-                                    FlagIcon(code: language.code)
-                                }
+                        if apps.isEmpty { emptyRow("The apps you dictate into show up here.") }
+                        ForEach(apps, id: \.name) { app in
+                            BarRow(label: app.name, value: Self.compact(app.words),
+                                   fraction: Double(app.words) / mostWords) {
+                                Image(nsImage: AppIcons.icon(for: app.bundleID, name: app.name)).resizable()
                             }
                         }
                     }
@@ -160,11 +144,20 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
 
-            DashCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("When you dictate").font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 9).padding(.vertical, 4)
-                    HourStrip(counts: UsageStats.hours(history.entries, in: period))
+            VStack(spacing: 14) {
+                DashCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CardTitle("When you dictate")
+                        HourStrip(counts: UsageStats.hours(history.entries, in: period))
+                    }
+                }
+                if !languages.isEmpty {
+                    DashCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            CardTitle("Languages")
+                            LanguageSplit(languages: languages)
+                        }
+                    }
                 }
             }
             .frame(width: 290)
@@ -405,13 +398,11 @@ private struct PasteNotice: View {
                     .frame(width: 290)
                 }
             Button("Allow Pasting") { permissions.requestAccessibility() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .glassButton(prominent: true)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.orange.opacity(0.25)))
+        .glassSurface(cornerRadius: 16, tint: Color.orange.opacity(0.18))
     }
 }
 

@@ -86,7 +86,9 @@ struct TrainingDataView: View {
                         try? FileManager.default.createDirectory(at: TrainingDataStore.folder, withIntermediateDirectories: true)
                         NSWorkspace.shared.activateFileViewerSelecting([TrainingDataStore.folder])
                     }
+                    .glassButton()
                     Button("Export…", action: export)
+                        .glassButton()
                         .help("A Hugging Face “audiofolder” dataset: audio/*.wav and metadata.jsonl.")
                     if let exportError {
                         Text(exportError).foregroundStyle(.red).font(.system(size: 12))

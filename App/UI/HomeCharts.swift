@@ -186,3 +186,56 @@ struct HourStrip: View {
         return String(format: "Mostly around %02d:00", peak)
     }
 }
+
+/// Languages as one bar split by share, with each language's flag and percentage
+/// underneath. The main language takes the accent colour, the second gray, the rest lighter.
+struct LanguageSplit: View {
+    let languages: [(code: String, share: Double)]
+
+    private var segments: [(code: String, name: String, share: Double, colour: Color)] {
+        let palette = [Color.accentColor, Color.primary.opacity(0.42), Color.secondary.opacity(0.28)]
+        var parts = languages.prefix(2).enumerated().map { index, language in
+            (code: language.code, name: SpeechLanguage.name(for: language.code), share: language.share, colour: palette[index])
+        }
+        let rest = languages.dropFirst(2).reduce(0) { $0 + $1.share }
+        if rest > 0.005 { parts.append((code: "", name: "Other", share: rest, colour: palette[2])) }
+        return parts
+    }
+
+    var body: some View {
+        let parts = segments
+        VStack(alignment: .leading, spacing: 10) {
+            GeometryReader { proxy in
+                let gaps = CGFloat(max(parts.count - 1, 0)) * 2
+                HStack(spacing: 2) {
+                    ForEach(parts.indices, id: \.self) { index in
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: index == 0 ? 4 : 1, bottomLeadingRadius: index == 0 ? 4 : 1,
+                            bottomTrailingRadius: index == parts.count - 1 ? 4 : 1,
+                            topTrailingRadius: index == parts.count - 1 ? 4 : 1
+                        )
+                        .fill(parts[index].colour)
+                        .frame(width: max(2, (proxy.size.width - gaps) * parts[index].share))
+                    }
+                }
+            }
+            .frame(height: 10)
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(parts.indices, id: \.self) { index in
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2).fill(parts[index].colour).frame(width: 8, height: 8)
+                        Text(parts[index].code.isEmpty ? "🌐" : SpeechLanguage.flag(for: parts[index].code))
+                            .font(.system(size: 13))
+                        Text(parts[index].name).font(.system(size: 13))
+                        Spacer()
+                        Text("\(Int((parts[index].share * 100).rounded())) %")
+                            .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Languages")
+        .accessibilityValue(parts.map { "\($0.name) \(Int(($0.share * 100).rounded())) percent" }.joined(separator: ", "))
+    }
+}
