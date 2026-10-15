@@ -5,10 +5,10 @@ import OSLog
 
 extension KeyboardShortcuts.Name {
     /// ⌥Space is free on this Mac: superwhisper holds Right ⌘, Sotto uses fn,
-    /// Wispr Flow uses fn combos. Paste Last sits next to ⌘V, on ⌥V.
+    /// Wispr Flow uses fn combos. Paste Last is ⌘V with ⌥ added: ⌘⌥V.
     static let pushToTalk = Self("pushToTalk", initial: .init(.space, modifiers: [.option]))
     static let pushToTalkRewrite = Self("pushToTalkRewrite", initial: .init(.space, modifiers: [.option, .shift]))
-    static let pasteLast = Self("pasteLast", initial: .init(.v, modifiers: [.option]))
+    static let pasteLast = Self("pasteLast", initial: .init(.v, modifiers: [.command, .option]))
 }
 
 /// Hold-to-talk state machine: hotkey down → record, hotkey up → transcribe
@@ -59,7 +59,7 @@ final class DictationController {
     private init() {}
 
     func start() {
-        Self.movePasteLastToOptionV()
+        Self.movePasteLastToCommandOptionV()
         KeyboardShortcuts.onKeyDown(for: .pushToTalk) { [weak self] in self?.pressed(.pushToTalk) }
         KeyboardShortcuts.onKeyUp(for: .pushToTalk) { [weak self] in self?.released(.pushToTalk) }
         KeyboardShortcuts.onKeyDown(for: .pushToTalkRewrite) { [weak self] in self?.pressed(.pushToTalkRewrite) }
@@ -429,7 +429,7 @@ final class DictationController {
         }
     }
 
-    /// ⌥V: types the last dictation again into whatever field is focused (a chat, a form…).
+    /// ⌘⌥V: types the last dictation again into whatever field is focused (a chat, a form…).
     private func pasteLast() {
         guard state == .idle else { return }
         guard let text = lastTranscript, !text.isEmpty else {
@@ -439,13 +439,15 @@ final class DictationController {
         deliver(text)
     }
 
-    /// Paste Last used to be ⌃⌥V; move anyone still on that default to ⌥V, once.
-    private static func movePasteLastToOptionV() {
-        let key = "pasteLastMovedToOptionV"
+    /// Paste Last used to be ⌃⌥V, then ⌥V; move anyone still on one of those defaults to
+    /// ⌘⌥V, once. A shortcut the user picked themselves is kept.
+    private static func movePasteLastToCommandOptionV() {
+        let key = "pasteLastMovedToCommandOptionV"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.set(true, forKey: key)
-        if KeyboardShortcuts.getShortcut(for: .pasteLast) == .init(.v, modifiers: [.control, .option]) {
-            KeyboardShortcuts.setShortcut(.init(.v, modifiers: [.option]), for: .pasteLast)
+        let oldDefaults: [KeyboardShortcuts.Shortcut] = [.init(.v, modifiers: [.control, .option]), .init(.v, modifiers: [.option])]
+        if let current = KeyboardShortcuts.getShortcut(for: .pasteLast), oldDefaults.contains(current) {
+            KeyboardShortcuts.setShortcut(.init(.v, modifiers: [.command, .option]), for: .pasteLast)
         }
     }
 
