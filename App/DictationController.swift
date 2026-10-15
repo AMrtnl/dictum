@@ -5,10 +5,10 @@ import OSLog
 
 extension KeyboardShortcuts.Name {
     /// ⌥Space is free on this Mac: superwhisper holds Right ⌘, Sotto uses fn,
-    /// Wispr Flow uses fn combos (and ⌃⌘V, hence ⌃⌥V for Paste Last).
+    /// Wispr Flow uses fn combos. Paste Last sits next to ⌘V, on ⌥V.
     static let pushToTalk = Self("pushToTalk", initial: .init(.space, modifiers: [.option]))
     static let pushToTalkRewrite = Self("pushToTalkRewrite", initial: .init(.space, modifiers: [.option, .shift]))
-    static let pasteLast = Self("pasteLast", initial: .init(.v, modifiers: [.control, .option]))
+    static let pasteLast = Self("pasteLast", initial: .init(.v, modifiers: [.option]))
 }
 
 /// Hold-to-talk state machine: hotkey down → record, hotkey up → transcribe
@@ -59,6 +59,7 @@ final class DictationController {
     private init() {}
 
     func start() {
+        Self.movePasteLastToOptionV()
         KeyboardShortcuts.onKeyDown(for: .pushToTalk) { [weak self] in self?.pressed(.pushToTalk) }
         KeyboardShortcuts.onKeyUp(for: .pushToTalk) { [weak self] in self?.released(.pushToTalk) }
         KeyboardShortcuts.onKeyDown(for: .pushToTalkRewrite) { [weak self] in self?.pressed(.pushToTalkRewrite) }
@@ -428,9 +429,24 @@ final class DictationController {
         }
     }
 
+    /// ⌥V: types the last dictation again into whatever field is focused (a chat, a form…).
     private func pasteLast() {
-        guard state == .idle, let text = lastTranscript else { return }
+        guard state == .idle else { return }
+        guard let text = lastTranscript, !text.isEmpty else {
+            showToast("Nothing to paste yet — dictate something first", symbol: "doc.on.clipboard")
+            return
+        }
         deliver(text)
+    }
+
+    /// Paste Last used to be ⌃⌥V; move anyone still on that default to ⌥V, once.
+    private static func movePasteLastToOptionV() {
+        let key = "pasteLastMovedToOptionV"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        if KeyboardShortcuts.getShortcut(for: .pasteLast) == .init(.v, modifiers: [.control, .option]) {
+            KeyboardShortcuts.setShortcut(.init(.v, modifiers: [.option]), for: .pasteLast)
+        }
     }
 
     // MARK: - Cancel / finish
